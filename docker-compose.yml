@@ -8,31 +8,32 @@ services:
     command: >
       bash -c "
         python -m etl.build_snapshots &&
+        python -m etl.features &&
         python -m models.train_conversion
       "
     volumes:
-      - data_vol:/app/data
-      - model_vol:/app/models/artifacts
+      - ./data:/app/data
+      - ./models/artifacts:/app/models/artifacts
     env_file: .env
-    restart: "no"
+    restart: "on-failure"
 
   # ── FastAPI backend ────────────────────────────────────────────────────────
   api:
     image: uc02-group-assistant:latest
     command: >
-      python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
+      python -m uvicorn api.main:app --host 0.0.0.0 --port 8888
     ports:
-      - "8000:8000"
+      - "8888:8888"
     volumes:
-      - data_vol:/app/data
-      - model_vol:/app/models/artifacts
+      - ./data:/app/data
+      - ./models/artifacts:/app/models/artifacts
     env_file: .env
-    restart: always
+    restart: unless-stopped
     depends_on:
       init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8888/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -42,23 +43,19 @@ services:
     image: uc02-group-assistant:latest
     command: >
       streamlit run ui/app.py
-        --server.port 8501
+        --server.port 8080
         --server.address 0.0.0.0
         --server.headless true
         --browser.gatherUsageStats false
     ports:
-      - "8501:8501"
+      - "8080:8080"
     volumes:
-      - data_vol:/app/data
-      - model_vol:/app/models/artifacts
+      - ./data:/app/data
+      - ./models/artifacts:/app/models/artifacts
     env_file: .env
     environment:
-      - API_BASE_URL=http://api:8000
-    restart: always
+      - API_BASE_URL=http://api:8888
+    restart: unless-stopped
     depends_on:
       api:
         condition: service_healthy
-
-volumes:
-  data_vol:
-  model_vol:
