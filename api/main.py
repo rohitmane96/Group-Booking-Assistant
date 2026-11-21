@@ -14,6 +14,7 @@ from typing import Any, Optional
 import pandas as pd
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 log = logging.getLogger(__name__)
@@ -104,7 +105,6 @@ def _load_features() -> pd.DataFrame:
 
 
 def _save_live(row: dict):
-    """Append a new submitted request to the live requests parquet."""
     new_df = pd.DataFrame([row])
     if _LIVE_PATH.exists():
         existing = pd.read_parquet(_LIVE_PATH)
@@ -113,11 +113,9 @@ def _save_live(row: dict):
     new_df.to_parquet(_LIVE_PATH, index=False)
 
 
-def _compute_live_features(req: "SubmitRequest") -> dict:
-    """Compute feature row for a freshly submitted request."""
+def _compute_live_features(req: SubmitRequest) -> dict:
     import uuid
-    import numpy as np
-    from etl.features import BC_LADDER, _ond_fl_indices, _LADDER_POS, _LOW_BCS
+    from etl.features import _ond_fl_indices, _LADDER_POS, _LOW_BCS
     from etl.build_snapshots import get_connection
 
     con = get_connection()
@@ -129,7 +127,6 @@ def _compute_live_features(req: "SubmitRequest") -> dict:
     created_ts = datetime.utcnow()
     request_id = f"LIVE-{str(uuid.uuid4())[:8].upper()}"
 
-    # inventory
     inv = fi[(fi["flight_number"] == req.flight_number) & (fi["departure_date"] == dep_date)] if req.flight_number else pd.DataFrame()
     total_capacity  = float(inv["adult_capacity"].max()) if not inv.empty else float("nan")
     seats_available = float(inv["available_seats"].sum()) if not inv.empty else float("nan")
@@ -145,7 +142,6 @@ def _compute_live_features(req: "SubmitRequest") -> dict:
     else:
         lowest_bc = None
 
-    # ref_fare
     ref_fare = float("nan")
     fl_idx = _ond_fl_indices(fl, req.ond)
     if not fl_idx.empty:
@@ -162,7 +158,6 @@ def _compute_live_features(req: "SubmitRequest") -> dict:
     lead_time = (dep_ts - pd.Timestamp(created_ts)).days
     fare_ratio = req.airline_quoted_fare / ref_fare if (not pd.isna(ref_fare) and ref_fare > 0) else float("nan")
 
-    # agent/route history from cached features
     feat_cache = _DATA_DIR / "cache" / "features.parquet"
     agent_pr, agent_pc, agent_cr = 0, 0, 0.0
     route_pr, route_pc, route_cr = 0, 0, 0.0
@@ -398,6 +393,16 @@ def rebuild_db():
     from models.train_conversion import train
     train()
     return {"status": "rebuild complete"}
+
+
+# ── Web UI (static Next.js export) ────────────────────────────────────────────
+# Must be mounted LAST so the API routes above take precedence.
+# Build with:  cd frontend && npm ci && npm run build   (produces frontend/out)
+FRONTEND_DIR = Path(os.getenv("FRONTEND_DIR", Path(__file__).parent.parent / "frontend" / "out"))
+if FRONTEND_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+else:
+    log.warning("Frontend build not found at %s - serving API only", FRONTEND_DIR)
 
 
 if __name__ == "__main__":

@@ -9,3 +9,6 @@ models/artifacts/
 *.csv
 *.parquet
 .DS_Store
+frontend/node_modules
+frontend/.next
+frontend/out

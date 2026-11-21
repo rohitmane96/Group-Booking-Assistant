@@ -33,10 +33,7 @@ _LOW_BCS = set(BC_LADDER[:3])
 # ── Vectorized inventory helpers ───────────────────────────────────────────
 
 def _build_inventory_features(gq: pd.DataFrame, fi: pd.DataFrame) -> pd.DataFrame:
-    """
-    Merge gq with fi on (flight_number, departure_date), aggregate per request.
-    Returns a DataFrame indexed by Request ID with inventory columns.
-    """
+    """Merge gq with fi on (flight_number, departure_date), aggregate per request."""
     fi = fi.copy()
     fi["departure_date"] = pd.to_datetime(fi["departure_date"], errors="coerce").dt.date
     gq = gq.copy()
@@ -50,7 +47,6 @@ def _build_inventory_features(gq: pd.DataFrame, fi: pd.DataFrame) -> pd.DataFram
         how="left",
     )
 
-    # aggregate capacity / seats
     agg = merged.groupby("Request ID").agg(
         total_capacity=("adult_capacity", "max"),
         seats_available=("available_seats", "sum"),
@@ -62,7 +58,6 @@ def _build_inventory_features(gq: pd.DataFrame, fi: pd.DataFrame) -> pd.DataFram
         np.nan,
     )
 
-    # low-BC seat count
     low_bc = (
         merged[merged["bc_code"].isin(_LOW_BCS)]
         .groupby("Request ID")["available_seats"]
@@ -71,7 +66,6 @@ def _build_inventory_features(gq: pd.DataFrame, fi: pd.DataFrame) -> pd.DataFram
     )
     agg = agg.join(low_bc)
 
-    # lowest open booking class per request
     avail = merged[merged["available_seats"] > 0].copy()
     if not avail.empty:
         avail["_bc_rank"] = avail["bc_code"].map(lambda x: _LADDER_POS.get(x, 999))
@@ -109,16 +103,13 @@ def _build_fare_features(
 ) -> pd.Series:
     """
     For each Request ID return ref_fare.
-    Groups requests by OND so each unique OND scans fl only once.
-    Uses a cross-join per OND group + vectorized validity filter.
+    Groups by unique OND so each OND scans fl only once.
     """
     fl_cols = fl[["ond_labels", "booking_class_id",
                   "sale_valid_from", "sale_valid_to", "adult_value"]]
 
     req_fare = gq[["Request ID", "OND 1", "_created_ts"]].copy()
-    req_fare = req_fare.join(
-        inv_agg[["lowest_bc"]], on="Request ID"
-    )
+    req_fare = req_fare.join(inv_agg[["lowest_bc"]], on="Request ID")
     req_fare = req_fare.dropna(subset=["OND 1", "_created_ts"])
 
     ref_fares: dict[str, float] = {}
@@ -129,19 +120,16 @@ def _build_fare_features(
             continue
         fl_ond = fl_cols.loc[fl_idx].reset_index(drop=True)
 
-        # cross-join: requests × fares for this OND
         grp = grp.reset_index(drop=True)
         grp["_key"] = 1
         fl_ond["_key"] = 1
         cross = grp.merge(fl_ond, on="_key").drop(columns="_key")
 
-        # validity filter (NaT = always valid)
         valid_from_ok = cross["sale_valid_from"].isna() | (cross["sale_valid_from"] <= cross["_created_ts"])
         valid_to_ok   = cross["sale_valid_to"].isna()   | (cross["sale_valid_to"]   >= cross["_created_ts"])
         cross["_valid"] = valid_from_ok & valid_to_ok
         cross["_bc_match"] = cross["booking_class_id"] == cross["lowest_bc"]
 
-        # priority: bc_match & valid → bc_match → valid → all
         for rid, rgrp in cross.groupby("Request ID"):
             bc_valid = rgrp[rgrp["_bc_match"] & rgrp["_valid"]]
             if not bc_valid.empty:
@@ -182,19 +170,15 @@ def build_features(
     fi = con.execute("SELECT * FROM flight_inventory").df()
     fl = con.execute("SELECT * FROM fares_list").df()
 
-    # ── prep timestamps ────────────────────────────────────────────
     gq["_created_ts"] = pd.to_datetime(gq["Created On"], errors="coerce")
     dep_ts = pd.to_datetime(gq["primary_departure"], errors="coerce")
 
-    # ── inventory features (vectorized) ───────────────────────────
     log.info("Building inventory features …")
     inv_agg = _build_inventory_features(gq, fi)
 
-    # ── fares lookup (OND-grouped) ─────────────────────────────────
     log.info("Building fare features …")
     ref_fare_series = _build_fare_features(gq, fl, inv_agg)
 
-    # ── assemble base feature frame ────────────────────────────────
     feat = pd.DataFrame({
         "request_id":          gq["Request ID"],
         "group_request_id":    gq["Group Request ID"],
@@ -202,39 +186,29 @@ def build_features(
         "status":              gq.get("Status"),
         "is_live":             gq.get("is_live", False),
         "converted":           gq.get("converted", np.nan),
-        # group
         "group_size":          gq["Passengers"],
         "ond":                 gq["OND 1"],
         "trip_type":           gq.get("Trip Type"),
         "agent_code":          gq.get("Agent Code"),
         "num_options":         gq.get("num_options_per_group", 1),
-        # fare
         "quoted_fare_per_pax": gq["Airline Quoted Fare"],
         "competitor_fare":     gq.get("Competitor Fare", np.nan),
-        # temporal
         "lead_time":           (dep_ts - gq["_created_ts"]).dt.days,
         "dow_travel":          dep_ts.dt.dayofweek,
         "month_travel":        dep_ts.dt.month,
         "created_month":       gq["_created_ts"].dt.month,
-        # flight
         "flight_number":       gq["primary_flight_number"],
         "departure_dt":        gq["primary_departure"],
     }).set_index("request_id")
 
-    # join inventory
     feat = feat.join(inv_agg[["total_capacity", "seats_available",
                                "load_factor", "low_bc_seats_avail"]])
-
-    # join ref_fare
     feat = feat.join(ref_fare_series)
 
-    # fare_ratio
     q = feat["quoted_fare_per_pax"]
     r = feat["ref_fare"]
     feat["fare_ratio"] = np.where(
-        q.notna() & r.notna() & (r > 0) & (q > 0),
-        q / r,
-        np.nan,
+        q.notna() & r.notna() & (r > 0) & (q > 0), q / r, np.nan,
     )
 
     feat = feat.reset_index()

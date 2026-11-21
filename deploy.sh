@@ -1,5 +1,6 @@
 #!/bin/bash
-# Zero-downtime deploy: nginx stays up while api/ui restart
+# Zero-downtime deploy: nginx stays up while api restarts
+# React frontend is embedded in the api image, no separate ui service.
 # Usage: ./deploy.sh
 set -e
 
@@ -19,13 +20,10 @@ for i in $(seq 1 30); do
     sleep 2
 done
 
-echo "==> Restarting ui …"
-docker compose up -d --no-deps ui
-
 echo "==> Reloading nginx config (zero downtime) …"
 docker compose exec nginx nginx -s reload
 
 echo ""
 docker compose ps
 echo ""
-echo "Deploy complete. Dashboard: http://$(curl -s ifconfig.me 2>/dev/null || echo '<VM_IP>'):8080"
+echo "Deploy complete. Dashboard: http://$(curl -s ifconfig.me 2>/dev/null || echo '<VM_IP>'):8888"

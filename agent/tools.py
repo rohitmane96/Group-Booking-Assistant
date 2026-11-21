@@ -41,7 +41,6 @@ _LIVE_PATH = _DATA_DIR / "live_requests.parquet"
 def _load_features(force_reload: bool = False) -> pd.DataFrame:
     """Load historical features, merging in any live submitted requests."""
     global _feature_df
-    # Always reload if live requests exist (they may have changed since last load)
     if _feature_df is None or force_reload or _LIVE_PATH.exists():
         cache = _DATA_DIR / "features.parquet"
         df = pd.read_parquet(cache) if cache.exists() else __import__("etl.features", fromlist=["build_features"]).build_features()
