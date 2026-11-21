@@ -77,14 +77,139 @@ class CounterOfferRequest(BaseModel):
     deadline_days: int
 
 
+class SubmitRequest(BaseModel):
+    ond: str
+    group_size: int
+    trip_type: str                     # ONE_WAY | ROUND_TRIP
+    departure_date: str                # YYYY-MM-DD
+    airline_quoted_fare: float
+    agent_code: Optional[str] = None
+    flight_number: Optional[str] = None
+    competitor_fare: Optional[float] = None
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+_DATA_DIR = Path(__file__).parent.parent / "data"
+_LIVE_PATH = _DATA_DIR / "cache" / "live_requests.parquet"
+
+
 def _load_features() -> pd.DataFrame:
-    cache = Path(__file__).parent.parent / "data" / "cache" / "features.parquet"
-    if cache.exists():
-        return pd.read_parquet(cache)
-    from etl.features import build_features
-    return build_features()
+    cache = _DATA_DIR / "cache" / "features.parquet"
+    df = pd.read_parquet(cache) if cache.exists() else __import__("etl.features", fromlist=["build_features"]).build_features()
+    if _LIVE_PATH.exists():
+        live = pd.read_parquet(_LIVE_PATH)
+        df = pd.concat([df, live], ignore_index=True)
+    return df
+
+
+def _save_live(row: dict):
+    """Append a new submitted request to the live requests parquet."""
+    new_df = pd.DataFrame([row])
+    if _LIVE_PATH.exists():
+        existing = pd.read_parquet(_LIVE_PATH)
+        new_df = pd.concat([existing, new_df], ignore_index=True)
+    _LIVE_PATH.parent.mkdir(exist_ok=True)
+    new_df.to_parquet(_LIVE_PATH, index=False)
+
+
+def _compute_live_features(req: "SubmitRequest") -> dict:
+    """Compute feature row for a freshly submitted request."""
+    import uuid
+    import numpy as np
+    from etl.features import BC_LADDER, _ond_fl_indices, _LADDER_POS, _LOW_BCS
+    from etl.build_snapshots import get_connection
+
+    con = get_connection()
+    fi = con.execute("SELECT * FROM flight_inventory").df()
+    fl = con.execute("SELECT * FROM fares_list").df()
+
+    fi["departure_date"] = pd.to_datetime(fi["departure_date"], errors="coerce").dt.date
+    dep_date = pd.to_datetime(req.departure_date).date()
+    created_ts = datetime.utcnow()
+    request_id = f"LIVE-{str(uuid.uuid4())[:8].upper()}"
+
+    # inventory
+    inv = fi[(fi["flight_number"] == req.flight_number) & (fi["departure_date"] == dep_date)] if req.flight_number else pd.DataFrame()
+    total_capacity  = float(inv["adult_capacity"].max()) if not inv.empty else float("nan")
+    seats_available = float(inv["available_seats"].sum()) if not inv.empty else float("nan")
+    seats_allocated = float(inv["allocated_seats"].sum()) if not inv.empty else float("nan")
+    load_factor     = seats_allocated / total_capacity if (not inv.empty and total_capacity > 0) else float("nan")
+    low_bc_avail    = float(inv[inv["bc_code"].isin(_LOW_BCS)]["available_seats"].sum()) if not inv.empty else float("nan")
+
+    avail_inv = inv[inv["available_seats"] > 0] if not inv.empty else pd.DataFrame()
+    if not avail_inv.empty:
+        avail_inv = avail_inv.copy()
+        avail_inv["_rank"] = avail_inv["bc_code"].map(lambda x: _LADDER_POS.get(x, 999))
+        lowest_bc = avail_inv.sort_values("_rank")["bc_code"].iloc[0]
+    else:
+        lowest_bc = None
+
+    # ref_fare
+    ref_fare = float("nan")
+    fl_idx = _ond_fl_indices(fl, req.ond)
+    if not fl_idx.empty:
+        fl_ond = fl.loc[fl_idx]
+        fl_bc = fl_ond[fl_ond["booking_class_id"] == lowest_bc] if lowest_bc else fl_ond
+        if fl_bc.empty:
+            fl_bc = fl_ond
+        vf = fl_bc["sale_valid_from"].isna() | (fl_bc["sale_valid_from"] <= pd.Timestamp(created_ts))
+        vt = fl_bc["sale_valid_to"].isna()   | (fl_bc["sale_valid_to"]   >= pd.Timestamp(created_ts))
+        matched = fl_bc[vf & vt]
+        ref_fare = float(matched["adult_value"].median()) if not matched.empty else float(fl_bc["adult_value"].median())
+
+    dep_ts = pd.Timestamp(req.departure_date)
+    lead_time = (dep_ts - pd.Timestamp(created_ts)).days
+    fare_ratio = req.airline_quoted_fare / ref_fare if (not pd.isna(ref_fare) and ref_fare > 0) else float("nan")
+
+    # agent/route history from cached features
+    feat_cache = _DATA_DIR / "cache" / "features.parquet"
+    agent_pr, agent_pc, agent_cr = 0, 0, 0.0
+    route_pr, route_pc, route_cr = 0, 0, 0.0
+    if feat_cache.exists() and req.agent_code:
+        hist = pd.read_parquet(feat_cache)
+        a = hist[hist["agent_code"] == req.agent_code]
+        agent_pr = int(len(a))
+        agent_pc = int(a["converted"].sum()) if "converted" in a.columns else 0
+        agent_cr = agent_pc / agent_pr if agent_pr > 0 else 0.0
+        r = hist[hist["ond"] == req.ond]
+        route_pr = int(len(r))
+        route_pc = int(r["converted"].sum()) if "converted" in r.columns else 0
+        route_cr = route_pc / route_pr if route_pr > 0 else 0.0
+
+    return {
+        "request_id":           request_id,
+        "group_request_id":     request_id,
+        "created_on":           created_ts.isoformat(),
+        "status":               "Submitted",
+        "is_live":              True,
+        "converted":            float("nan"),
+        "group_size":           float(req.group_size),
+        "ond":                  req.ond,
+        "trip_type":            req.trip_type,
+        "agent_code":           req.agent_code,
+        "num_options":          1.0,
+        "quoted_fare_per_pax":  float(req.airline_quoted_fare),
+        "ref_fare":             ref_fare,
+        "fare_ratio":           fare_ratio,
+        "competitor_fare":      float(req.competitor_fare) if req.competitor_fare else float("nan"),
+        "load_factor":          load_factor,
+        "seats_available":      seats_available,
+        "low_bc_seats_avail":   low_bc_avail,
+        "total_capacity":       total_capacity,
+        "lead_time":            float(lead_time),
+        "dow_travel":           float(dep_ts.dayofweek),
+        "month_travel":         float(dep_ts.month),
+        "created_month":        float(created_ts.month),
+        "flight_number":        req.flight_number,
+        "departure_dt":         req.departure_date,
+        "agent_prior_requests": float(agent_pr),
+        "agent_prior_converted":float(agent_pc),
+        "agent_conv_rate":      agent_cr,
+        "route_prior_requests": float(route_pr),
+        "route_prior_converted":float(route_pc),
+        "route_conv_rate":      route_cr,
+    }
 
 
 def _write_audit(entry: dict):
@@ -159,6 +284,21 @@ def list_all_requests(limit: int = 200):
             "converted": int(r["converted"]) if pd.notna(r.get("converted")) else None,
         })
     return {"requests": records, "total": len(records)}
+
+
+@app.post("/requests")
+def submit_request(body: SubmitRequest):
+    """Submit a new live group booking request and compute its features."""
+    row = _compute_live_features(body)
+    _save_live(row)
+    _write_audit({
+        "timestamp":  datetime.utcnow().isoformat(),
+        "request_id": row["request_id"],
+        "action":     "submitted",
+        "note":       f"New request: {body.ond} {body.group_size}pax @ AED{body.airline_quoted_fare}",
+        "source":     "ui_form",
+    })
+    return {"request_id": row["request_id"], "status": "created", "features": row}
 
 
 @app.get("/requests/{request_id}")

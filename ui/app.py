@@ -55,12 +55,14 @@ st.sidebar.image(
 )
 st.sidebar.title("Group Booking Queue")
 
-view = st.sidebar.radio("View", ["Open Requests", "All Requests", "Audit Log"], index=0)
+view = st.sidebar.radio("View", ["Open Requests", "All Requests", "Submit New Request", "Audit Log"], index=0)
 
 if view == "Open Requests":
     data = api("/requests")
 elif view == "All Requests":
     data = api("/requests/all")
+elif view == "Submit New Request":
+    data = None
 else:
     data = None
 
@@ -92,6 +94,107 @@ if view == "Audit Log":
         st.dataframe(df_audit, use_container_width=True)
     else:
         st.info("No audit entries yet.")
+    st.stop()
+
+# ── submit new request view ────────────────────────────────────────────────────
+
+if view == "Submit New Request":
+    st.title("✈️ Submit New Group Booking Request")
+    st.caption("Enter the details of the incoming group enquiry to get an instant AI recommendation.")
+
+    with st.form("submit_form"):
+        st.subheader("Flight & Route")
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            ond = st.text_input("OND (e.g. SHJ/MAA)", placeholder="SHJ/MAA")
+        with f2:
+            departure_date = st.date_input("Departure Date")
+        with f3:
+            flight_number = st.text_input("Flight Number (optional)", placeholder="G9068")
+
+        st.subheader("Group Details")
+        g1, g2, g3 = st.columns(3)
+        with g1:
+            group_size = st.number_input("Passengers", min_value=10, max_value=300, value=30, step=1)
+        with g2:
+            trip_type = st.selectbox("Trip Type", ["ONE_WAY", "ROUND_TRIP"])
+        with g3:
+            agent_code = st.text_input("Agent Code (optional)", placeholder="AG001")
+
+        st.subheader("Fare Details")
+        p1, p2 = st.columns(2)
+        with p1:
+            airline_quoted_fare = st.number_input("Airline Quoted Fare / Pax (AED)", min_value=100, max_value=20000, value=1500, step=50)
+        with p2:
+            competitor_fare = st.number_input("Competitor Fare / Pax (AED, optional — 0 = not provided)", min_value=0, max_value=20000, value=0, step=50)
+
+        submitted = st.form_submit_button("🚀 Submit & Score", type="primary", use_container_width=True)
+
+    if submitted:
+        if not ond:
+            st.error("OND is required (e.g. SHJ/MAA)")
+        else:
+            payload = {
+                "ond": ond.strip().upper(),
+                "group_size": int(group_size),
+                "trip_type": trip_type,
+                "departure_date": str(departure_date),
+                "airline_quoted_fare": float(airline_quoted_fare),
+                "agent_code": agent_code.strip() or None,
+                "flight_number": flight_number.strip().upper() or None,
+                "competitor_fare": float(competitor_fare) if competitor_fare > 0 else None,
+            }
+            with st.spinner("Submitting request and scoring …"):
+                result = api("/requests", method="POST", body=payload)
+
+            if result:
+                new_id = result["request_id"]
+                st.success(f"Request **{new_id}** created successfully!")
+
+                # auto-score and show recommendation inline
+                with st.spinner("Running recommendation engines …"):
+                    scored = api(f"/requests/{new_id}/score", method="POST")
+
+                if scored:
+                    rec   = scored.get("recommendation", "?")
+                    color = ACTION_COLOR.get(rec, "#6b7280")
+
+                    st.markdown(f"### Recommendation: **:{color.replace('#','')} {rec}**")
+                    m1, m2, m3, m4, m5 = st.columns(5)
+                    m1.metric("Action", rec)
+                    m2.metric("Best Fare / Pax", f"AED {scored.get('best_fare', 0):,}")
+                    m3.metric("Seats", scored.get("best_seats", 0))
+                    m4.metric("P(Convert)", f"{scored.get('p_convert_at_best', 0):.1%}")
+                    m5.metric("Option Deadline", f"{scored.get('best_deadline_days', 14)} days")
+
+                    ec = scored.get("expected_contribution", 0)
+                    bl = scored.get("baseline_contribution", 0)
+                    st.markdown(
+                        f"""<div style='background:{color}20;border-left:4px solid {color};
+                        padding:12px 16px;border-radius:4px;margin:8px 0'>
+                        <b style='color:{color};font-size:1.1em'>{rec}</b> &nbsp;|&nbsp;
+                        Expected contribution: <b>AED {ec:,}</b> &nbsp;|&nbsp;
+                        Baseline: <b>AED {bl:,}</b> &nbsp;|&nbsp;
+                        Lift: <b>AED {scored.get('lift_vs_baseline', 0):+,}</b>
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
+
+                    fare_curve = scored.get("fare_curve", [])
+                    if fare_curve:
+                        df_fc = pd.DataFrame(fare_curve)
+                        fig = px.line(
+                            df_fc, x="fare", y="p_convert",
+                            labels={"fare": "Fare / Pax (AED)", "p_convert": "P(Convert)"},
+                            title="Fare-Response Curve",
+                            markers=True,
+                        )
+                        fig.add_vline(x=scored.get("best_fare", 0), line_dash="dash",
+                                      line_color=color, annotation_text="Recommended")
+                        fig.update_layout(yaxis_tickformat=".0%", height=320)
+                        st.plotly_chart(fig, use_container_width=True)
+
+                    st.info(f"💡 To explore further, select **{new_id}** from the sidebar under Open Requests.")
     st.stop()
 
 # ── main panel ─────────────────────────────────────────────────────────────────
