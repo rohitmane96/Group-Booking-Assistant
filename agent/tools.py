@@ -73,10 +73,14 @@ def get_request(request_id: str) -> dict:
 
 # ── Tool: score_request ───────────────────────────────────────────────────────
 
-def score_request(request_id: str) -> dict:
+def score_request(request_id: str, light: bool = False) -> dict:
     """
     Run all engines for a request:
     conversion probability, fare-response curve, displacement, optimizer.
+
+    light=True skips the SHAP drivers and the chart payloads (fare curve, heat map).
+    The optimizer and baseline numbers are identical; it is used for portfolio-level
+    aggregation where only the contribution figures are needed.
     """
     feat = _load_features()
     row = feat[feat["request_id"] == request_id]
@@ -102,7 +106,7 @@ def score_request(request_id: str) -> dict:
         ref_fare = r.get("quoted_fare_per_pax", 1000) or 1000
 
     # SHAP drivers
-    drivers = get_drivers(request_id, feat_dict)
+    drivers = [] if light else get_drivers(request_id, feat_dict)
 
     # optimizer
     from engines.optimizer import run_optimizer
@@ -123,6 +127,18 @@ def score_request(request_id: str) -> dict:
         predict_fn=_predict,
     )
 
+    from engines.comparison import evaluate_strategies
+    comparison = evaluate_strategies(
+        request_features=feat_dict,
+        ref_fare=float(ref_fare),
+        capacity=float(capacity),
+        seats_allocated=float(seats_alloc),
+        ond=ond,
+        travel_month=travel_month,
+        lead_time=lead_time,
+        ai_result=result,
+    )
+
     return {
         "request_id":          request_id,
         "p_convert_base":      round(p_base, 4),
@@ -137,9 +153,10 @@ def score_request(request_id: str) -> dict:
         "displacement_cost":   result["displacement_cost"],
         "remaining_demand":    result["remaining_demand"],
         "ref_fare":            round(float(ref_fare)),
+        "strategy_comparison": comparison,
         "drivers":             drivers,
-        "fare_curve":          result["fare_curve"].to_dict(orient="records"),
-        "heat_map":            result["heat_map"].to_dict(orient="records"),
+        "fare_curve":          [] if light else result["fare_curve"].to_dict(orient="records"),
+        "heat_map":            [] if light else result["heat_map"].to_dict(orient="records"),
     }
 
 
