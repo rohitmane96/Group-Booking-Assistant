@@ -87,12 +87,11 @@ def run_optimizer(
     requested_seats = int(request_features.get("group_size", 20))
 
     fare_grid  = np.linspace(fare_floor, fare_ceil, fare_steps)
+    # Never offer more seats than the agent requested — cap at requested_seats
     seats_grid = sorted(set([
         min(requested_seats, max_seats),
         min(int(0.75 * requested_seats), max_seats),
         min(int(0.50 * requested_seats), max_seats),
-        min(int(1.25 * requested_seats), max_seats),
-        min(max_seats, max_seats),
     ]))
     seats_grid = [s for s in seats_grid if s > 0]
 
@@ -174,8 +173,43 @@ def run_optimizer(
     if requested_fare is None or np.isnan(float(requested_fare)):
         requested_fare = ref_fare
 
+    # P(convert) at the actually quoted fare (not optimizer's best fare)
+    p_at_requested = float(p_fare[np.argmin(np.abs(fare_grid - requested_fare))])
+    fare_ratio_requested = requested_fare / max(ref_fare, 1)
+
+    high_conf   = policy.get("high_confidence_accept_threshold", 0.50)   # always Accept
+    medium_conf = policy.get("medium_confidence_accept_threshold", 0.30)  # Accept if already discounting
+    low_conf    = policy.get("low_confidence_accept_threshold", 0.15)     # Accept if big discount
+
     if best_ec <= min_ec:
         recommendation = "Reject"
+    elif best_seats >= requested_seats and requested_fare >= best_fare:
+        # Agent quotes AT OR ABOVE our optimizer's best fare.
+        # If P(convert) is decent, accept at their (higher) price — take the revenue.
+        # If P(convert) is very low, counter at our best (lower) fare to improve conversion.
+        if p_at_requested >= low_conf:
+            recommendation = "Accept"
+            best_fare  = requested_fare
+            best_seats = requested_seats
+        else:
+            recommendation = "Counteroffer"
+            # best_fare stays at optimizer's lower fare to improve conversion odds
+            best_seats = requested_seats
+    elif p_at_requested >= high_conf and best_seats >= requested_seats:
+        # Very high confidence — accept at quoted fare regardless
+        recommendation = "Accept"
+        best_fare  = requested_fare
+        best_seats = requested_seats
+    elif p_at_requested >= medium_conf and fare_ratio_requested <= 1.0 and best_seats >= requested_seats:
+        # Good confidence + agent already quoting at/below reference — take the deal
+        recommendation = "Accept"
+        best_fare  = requested_fare
+        best_seats = requested_seats
+    elif p_at_requested >= low_conf and fare_ratio_requested <= 0.85 and best_seats >= requested_seats:
+        # Decent confidence + agent giving a significant discount — accept
+        recommendation = "Accept"
+        best_fare  = requested_fare
+        best_seats = requested_seats
     elif best_seats >= requested_seats and abs(best_fare - requested_fare) / max(requested_fare, 1) < 0.05:
         recommendation = "Accept"
     elif best_seats >= requested_seats and best_fare > requested_fare * 1.02:

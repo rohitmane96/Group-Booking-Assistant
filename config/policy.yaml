@@ -15,7 +15,7 @@ max_seats_per_group: 80             # hard cap on seats per request
 attrition: 0.90    # fraction of booked pax who actually travel (0.9 = 10% attrition)
 
 # Deadline options (days before departure)
-option_deadlines_days: [7, 14, 21]   # option confirmation deadlines to evaluate
+option_deadlines_days: [3, 7, 14]    # 3d urgent/high-load, 7d standard LCC, 14d far-out
 release_deadline_days: 3             # days before departure for final release
 
 # Displacement cost
@@ -28,6 +28,9 @@ baseline_max_load_factor: 0.75        # baseline accepts if LF below this thresh
 # Decision thresholds
 min_expected_contribution: 0        # reject if optimizer objective is negative
 min_pconvert_to_accept: 0.05        # minimum conversion probability to offer
+high_confidence_accept_threshold: 0.50   # if P(convert) >= this, Accept regardless
+medium_confidence_accept_threshold: 0.30  # Accept if agent quoting at/below reference fare
+low_confidence_accept_threshold: 0.15     # Accept if agent giving >15% discount (fare_ratio <= 0.85)
 
 # Elasticity assumption (for fare-response simulation)
 # When quoted_fare / reference_fare varies, assumed P(convert) elasticity

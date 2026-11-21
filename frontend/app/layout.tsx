@@ -3,8 +3,8 @@ import type { Metadata, Viewport } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Aeroform | Intelligent Group Booking',
-  description: 'Predict, price, and convert airline group bookings with explainable AI recommendations and human approval.',
+  title: 'GroupLens | Group Booking AI',
+  description: 'AI-powered group booking intelligence — predict, price, and convert airline group requests with explainable recommendations and human approval.',
   generator: 'v0.app',
   icons: {
     icon: [
