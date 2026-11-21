@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowUpRight, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy, FileText, Filter, History, LayoutDashboard, List, Plane, Search, Send, ShieldCheck, Sparkles, X } from 'lucide-react'
+import { Activity, ArrowUpRight, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy, FileText, History, LayoutDashboard, List, ListFilter, Plane, Search, Send, ShieldCheck, Sparkles, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { api, ApiError, type ApprovalRequest, type AuditEntry, type ChatMessage, type RequestAllSummary, type RequestDetail, type RequestSummary, type ScenarioResponse, type ScoreResponse, type SendCounterOfferRequest } from '@/lib/api'
@@ -49,8 +49,7 @@ export function GroupBookingDashboard() {
   const [deadline, setDeadline] = useState(7)
   const [heatDeadline, setHeatDeadline] = useState(7)
   const [query, setQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState<string[]>([])
-  const [filterOpen, setFilterOpen] = useState(false)
+  const [status, setStatus] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(8)
   const [greeting, setGreeting] = useState('Welcome')
@@ -61,7 +60,9 @@ export function GroupBookingDashboard() {
   const [audit, setAudit] = useState<AuditEntry[]>([])
   const [today, setToday] = useState('')
   const [chat, setChat] = useState('')
-  const [answer, setAnswer] = useState('')
+  const [thread, setThread] = useState<{ role: 'user' | 'assistant'; text: string }[]>([])
+  const [typing, setTyping] = useState(false)
+  const bodyRef = useRef<HTMLDivElement>(null)
   const [chatHistory, setChatHistory] = useState<ChatMessage[] | null>(null)
   const [chatBusy, setChatBusy] = useState(false)
   const [counterofferDraft, setCounterofferDraft] = useState('')
@@ -73,6 +74,9 @@ export function GroupBookingDashboard() {
   const [activePage, setActivePage] = useState<Page>('overview')
   const [panelOpen, setPanelOpen] = useState(true)
   const [allRequests, setAllRequests] = useState<RequestAllSummary[]>([])
+  const [allStatus, setAllStatus] = useState('')
+  const [allPage, setAllPage] = useState(1)
+  const [allPageSize, setAllPageSize] = useState(10)
   const [allReqState, setAllReqState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
 
   function flash(msg: string) {
@@ -102,7 +106,7 @@ export function GroupBookingDashboard() {
     if (!selectedId) return
     let alive = true
     setDetail(null); setScore(null); setScenario(null); setScoreError(''); setScoring(true)
-    setDecision(null); setAnswer(''); setCounterofferDraft(''); setChatHistory(null)
+    setDecision(null); setThread([]); setTyping(false); setCounterofferDraft(''); setChatHistory(null)
     setEmailSent(false)
     api.getRequest(selectedId).then((d) => alive && setDetail(d)).catch(() => {})
     api.score(selectedId).then((s) => {
@@ -146,7 +150,8 @@ export function GroupBookingDashboard() {
   }, [activePage, allReqState])
 
   // reset to first page whenever the result set changes
-  useEffect(() => { setPage(1) }, [query, statusFilter, pageSize])
+  useEffect(() => { setPage(1) }, [query, status, pageSize])
+  useEffect(() => { setAllPage(1) }, [allStatus, allPageSize])
   // ⌘K / Ctrl+K focuses search
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); searchRef.current?.focus() } }
@@ -159,14 +164,19 @@ export function GroupBookingDashboard() {
   const probability = scenario?.p_convert ?? score?.p_convert_at_best ?? null
   const contribution = scenario?.expected_contribution ?? score?.expected_contribution ?? null
   const refFare = score?.ref_fare ?? detail?.ref_fare ?? selected?.ref_fare ?? 0
+  const allStatusCounts = useMemo(() => allRequests.reduce<Record<string, number>>((acc, r) => { acc[r.status] = (acc[r.status] ?? 0) + 1; return acc }, {}), [allRequests])
+  const allStatuses = useMemo(() => Object.keys(allStatusCounts).sort(), [allStatusCounts])
+  const allFiltered = useMemo(() => allRequests.filter((r) => !allStatus || r.status === allStatus), [allRequests, allStatus])
+  const allTotalPages = Math.max(1, Math.ceil(allFiltered.length / allPageSize))
+  const allSafePage = Math.min(allPage, allTotalPages)
+  const allRows = allFiltered.slice((allSafePage - 1) * allPageSize, allSafePage * allPageSize)
   const statusCounts = useMemo(() => requests.reduce<Record<string, number>>((acc, r) => { acc[r.status] = (acc[r.status] ?? 0) + 1; return acc }, {}), [requests])
   const statuses = useMemo(() => Object.keys(statusCounts).sort(), [statusCounts])
-  const filtered = useMemo(() => requests.filter((r) => (statusFilter.length === 0 || statusFilter.includes(r.status)) && `${r.ond} ${r.request_id} ${r.group_request_id} ${r.flight_number}`.toLowerCase().includes(query.toLowerCase())), [requests, query, statusFilter])
+  const filtered = useMemo(() => requests.filter((r) => (!status || r.status === status) && `${r.ond} ${r.request_id} ${r.group_request_id} ${r.flight_number}`.toLowerCase().includes(query.toLowerCase())), [requests, query, status])
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const safePage = Math.min(page, totalPages)
   const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize)
-  const toggleStatus = (st: string) => setStatusFilter((cur) => cur.includes(st) ? cur.filter((x) => x !== st) : [...cur, st])
-  const clearFilters = () => { setStatusFilter([]); setQuery('') }
+  const clearFilters = () => { setStatus(''); setQuery('') }
 
   const curve = score?.fare_curve ?? []
   const fareMin = curve.length ? curve[0].fare : Math.round(refFare * 0.7)
@@ -206,11 +216,11 @@ export function GroupBookingDashboard() {
   async function draftCounteroffer() {
     if (!selectedId) return
     try {
-      setAnswer('Drafting counteroffer…')
+      setThread((t) => [...t, { role: 'user', text: 'Draft a counteroffer' }]); setTyping(true)
       const r = await api.counteroffer(selectedId, { fare, seats, deadline_days: deadline })
       setCounterofferDraft(r.counteroffer_email)
-      setAnswer(`Counteroffer drafted for ${selectedId}: ${r.seats} seats at ${aed(r.fare)} per passenger, ${r.deadline_days}-day deadline. It remains a draft for human review; nothing has been sent.`)
-    } catch (e) { setAnswer(''); flash(errMsg(e)) }
+      setThread((t) => [...t, { role: 'assistant', text: `**Counteroffer drafted** for ${selectedId}.\n\n- ${r.seats} seats at **${aed(r.fare)}** per passenger\n- ${r.deadline_days}-day confirmation deadline\n\nReview and edit the email below. **Nothing has been sent.**` }])
+    } catch (e) { flash(errMsg(e)) } finally { setTyping(false) }
   }
 
   async function copyCounteroffer() {
@@ -231,12 +241,14 @@ export function GroupBookingDashboard() {
 
   async function ask(message: string) {
     if (!message.trim() || !selectedId || chatBusy) return
-    setChatBusy(true); setAnswer('Thinking…')
+    setChatBusy(true); setTyping(true); setThread((t) => [...t, { role: 'user', text: message }])
     try {
       const r = await api.chat(`[Request ID: ${selectedId}] ${message}`, chatHistory)
-      setAnswer(r.response); setChatHistory(r.history)
-    } catch (e) { setAnswer(''); flash(errMsg(e)) } finally { setChatBusy(false) }
+      setThread((t) => [...t, { role: 'assistant', text: r.response }]); setChatHistory(r.history)
+    } catch (e) { flash(errMsg(e)) } finally { setChatBusy(false); setTyping(false) }
   }
+
+  useEffect(() => { bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight, behavior: 'smooth' }) }, [thread, typing, counterofferDraft])
 
   const recColor = score ? REC_COLORS[score.recommendation] : undefined
 
@@ -271,10 +283,9 @@ export function GroupBookingDashboard() {
         {/* ── OPEN REQUESTS PAGE ────────────────────────────────────── */}
         {activePage === 'requests' && <>
         <div className="content-grid">
-          <section className="panel queue-panel"><div className="panel-head"><div><div className="panel-title">Requests to review <span className="count-badge">{filtered.length === requests.length ? total : `${filtered.length} of ${requests.length}`}</span></div><div className="panel-caption">Open group requests</div></div><button type="button" className={`subtle-button filter-toggle ${statusFilter.length ? 'active' : ''}`} aria-expanded={filterOpen} aria-controls="status-filter" onClick={() => setFilterOpen((o) => !o)}><Filter size={14}/> Filter{statusFilter.length > 0 && <span className="filter-badge">{statusFilter.length}</span>}</button></div>
-            {(filterOpen || statusFilter.length > 0) && <div id="status-filter" className="filter-bar" role="group" aria-label="Filter by request status"><span className="filter-label">STATUS</span>{statuses.map((st) => <button type="button" key={st} className={`filter-chip ${statusFilter.includes(st) ? 'on' : ''}`} aria-pressed={statusFilter.includes(st)} onClick={() => toggleStatus(st)}>{st} <i>{statusCounts[st]}</i></button>)}{statusFilter.length > 0 && <button type="button" className="filter-clear" onClick={() => setStatusFilter([])}>Clear</button>}</div>}
+          <section className="panel queue-panel"><div className="panel-head"><div><div className="panel-title">Requests to review <span className="count-badge">{filtered.length === requests.length ? total : `${filtered.length} of ${requests.length}`}</span></div><div className="panel-caption">Open group requests</div></div><StatusFilter label="Filter requests by status" value={status} onChange={setStatus} total={requests.length} options={statuses.map((st) => ({ value: st, count: statusCounts[st] }))}/></div>
             <label className="search-box"><Search size={15}/><input ref={searchRef} aria-label="Search requests" placeholder="Search requests…" value={query} onChange={(e) => setQuery(e.target.value)}/><kbd>Ctrl K</kbd></label>
-            <div className="request-list">{pageRows.map((r) => <button key={r.request_id} className={`request-row ${selectedId === r.request_id ? 'selected' : ''}`} onClick={() => setSelectedId(r.request_id)}><span className="request-avatar">{initials(r.ond)}</span><span className="request-main"><span className="request-route">{route(r.ond)}<span className="request-id">{r.request_id}</span></span><span className="request-meta">{r.flight_number} · {r.group_size} passengers</span></span><span className="request-side"><span className={`status ${r.status.toLowerCase()}`}>{r.status}</span><span className="request-date"><Clock3 size={12}/>{daysLeft(r.departure_dt) ?? '—'}d left</span></span></button>)}{listState === 'loading' && Array.from({ length: 5 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true"/>)}{listState === 'ready' && filtered.length === 0 && <div className="empty-state">No requests match{statusFilter.length ? ` ${statusFilter.join(' / ')}` : ''}{query ? ` "${query}"` : ''}. <button type="button" className="filter-clear" onClick={clearFilters}>Clear filters</button></div>}</div>
+            <div className="request-list">{pageRows.map((r) => <button key={r.request_id} className={`request-row ${selectedId === r.request_id ? 'selected' : ''}`} onClick={() => setSelectedId(r.request_id)}><span className="request-avatar">{initials(r.ond)}</span><span className="request-main"><span className="request-route">{route(r.ond)}<span className="request-id">{r.request_id}</span></span><span className="request-meta">{r.flight_number} · {r.group_size} passengers</span></span><span className="request-side"><StatusBadge status={r.status}/><span className="request-date"><Clock3 size={12}/>{daysLeft(r.departure_dt) ?? '—'}d left</span></span></button>)}{listState === 'loading' && Array.from({ length: 5 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true"/>)}{listState === 'ready' && filtered.length === 0 && <div className="empty-state">No requests match{status ? ` ${status}` : ''}{query ? ` "${query}"` : ''}. <button type="button" className="filter-clear" onClick={clearFilters}>Clear filters</button></div>}</div>
             {filtered.length > 0 && <nav className="pagination" aria-label="Requests pagination"><span className="page-info">{(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filtered.length)} of {filtered.length}</span><div className="page-controls"><button type="button" className="page-btn" aria-label="Previous page" disabled={safePage === 1} onClick={() => setPage(safePage - 1)}>‹</button>{pageList(safePage, totalPages).map((n, i) => n === '…' ? <span key={`e${i}`} className="page-gap">…</span> : <button type="button" key={n} className={`page-btn ${n === safePage ? 'current' : ''}`} aria-current={n === safePage ? 'page' : undefined} aria-label={`Page ${n}`} onClick={() => setPage(n)}>{n}</button>)}<button type="button" className="page-btn" aria-label="Next page" disabled={safePage === totalPages} onClick={() => setPage(safePage + 1)}>›</button></div><label className="page-size">Rows<select aria-label="Rows per page" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>{PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}</select></label></nav>}
           </section>
           <section className="panel recommendation-panel"><div className="panel-head"><div><div className="panel-title">AI recommendation <span className="ai-tag"><Sparkles size={11}/> ASSIST</span></div><div className="panel-caption">{selected ? `${selected.request_id} · ${route(selected.ond)} · ${fmtDate(selected.departure_dt)}` : 'No request selected'}</div></div></div>
@@ -309,19 +320,21 @@ export function GroupBookingDashboard() {
             {detail?.load_factor != null && <div className="capacity-bar"><span style={{ width: `${Math.round(detail.load_factor * 100)}%` }}/></div>}
             <div className="classes"><span>Agent</span><b>{detail?.agent_code ?? '—'}</b><b>conv. <i>{detail ? pct(detail.agent_conv_rate) : '—'}</i></b><b>route conv. <i>{detail ? pct(detail.route_conv_rate) : '—'}</i></b></div></section>
           <section className="panel trend-panel"><div className="panel-head"><div><div className="panel-title">Fare × seats heat map</div><div className="panel-caption">Expected contribution · deadline {heatDeadline} days</div></div><select aria-label="Heat map deadline" className="subtle-button" value={heatDeadline} onChange={(e) => setHeatDeadline(Number(e.target.value))}>{DEADLINES.map((d) => <option key={d} value={d}>{d} days</option>)}</select></div>
-            {heat.length ? <div role="img" aria-label="Expected contribution by fare and seats" style={{ display: 'grid', gridTemplateColumns: `auto repeat(${heatFares.length}, 1fr)`, gap: 2, fontSize: 10 }}>
+            {heat.length ? <div role="img" aria-label="Expected contribution by fare and seats" style={{ display: 'grid', gridTemplateColumns: `auto repeat(${heatFares.length}, 1fr)`, gap: 2, fontSize: 12 }}>
               {heatSeats.map((s) => <HeatRow key={s} seats={s} fares={heatFares} heat={heat} color={heatColor}/>)}
-              <span/>{heatFares.map((f) => <span key={f} style={{ textAlign: 'center' }}>{f}</span>)}
+              <span/>{heatFares.map((f, i) => <span key={f} style={{ textAlign: 'center', fontSize: 11 }}>{i % 2 === 0 ? f : ''}</span>)}
             </div> : <div className="empty-state">{scoring ? 'Waiting for score…' : 'No data'}</div>}</section>
         </div>
         </>}
 
         {/* ── ALL REQUESTS PAGE ─────────────────────────────────────── */}
-        {activePage === 'all-requests' && <section className="panel" style={{margin:'0 0 24px'}}>
-          <div className="panel-head"><div><div className="panel-title">All requests <span className="count-badge">{allRequests.length}</span></div><div className="panel-caption">Complete history including closed and converted</div></div>{allReqState === 'error' && <button className="subtle-button" onClick={() => setAllReqState('idle')}>Retry</button>}</div>
+        {activePage === 'all-requests' && <section className="panel all-requests-panel" style={{margin:'0 0 24px'}}>
+          <div className="panel-head"><div><div className="panel-title">All requests <span className="count-badge">{allFiltered.length === allRequests.length ? allRequests.length : `${allFiltered.length} of ${allRequests.length}`}</span></div><div className="panel-caption">Complete history including closed and converted</div></div>{allReqState === 'error' && <button className="subtle-button" onClick={() => setAllReqState('idle')}>Retry</button>}{allReqState === 'ready' && <StatusFilter label="Filter all requests by status" value={allStatus} onChange={setAllStatus} total={allRequests.length} options={allStatuses.map((st) => ({ value: st, count: allStatusCounts[st] }))}/>}</div>
           {allReqState === 'loading' && Array.from({ length: 8 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true"/>)}
-          {allReqState === 'ready' && <div className="all-requests-table"><table><thead><tr><th>Request ID</th><th>Group ID</th><th>Created</th><th>Status</th><th>Route</th><th>Group size</th><th>Converted</th></tr></thead><tbody>{allRequests.map((r) => <tr key={r.request_id} className={selectedId === r.request_id ? 'selected-row' : ''} onClick={() => { setSelectedId(r.request_id); setActivePage('requests') }}><td><code>{r.request_id}</code></td><td><code>{r.group_request_id}</code></td><td>{fmtTs(r.created_on)}</td><td><span className={`status ${r.status.toLowerCase()}`}>{r.status}</span></td><td>{route(r.ond)}</td><td>{r.group_size}</td><td>{r.converted != null ? r.converted : '—'}</td></tr>)}</tbody></table></div>}
+          {allReqState === 'ready' && <div className="all-requests-table"><table><thead><tr><th>Request ID</th><th>Group ID</th><th>Created</th><th>Status</th><th>Route</th><th>Group size</th><th>Converted</th></tr></thead><tbody>{allRows.map((r) => <tr key={r.request_id} className={selectedId === r.request_id ? 'selected-row' : ''} onClick={() => { setSelectedId(r.request_id); setActivePage('requests') }}><td><code>{r.request_id}</code></td><td><code>{r.group_request_id}</code></td><td>{fmtTs(r.created_on)}</td><td><StatusBadge status={r.status}/></td><td>{route(r.ond)}</td><td>{r.group_size}</td><td>{r.converted != null ? r.converted : '—'}</td></tr>)}</tbody></table></div>}
           {allReqState === 'ready' && allRequests.length === 0 && <div className="empty-state">No requests found.</div>}
+          {allReqState === 'ready' && allRequests.length > 0 && allFiltered.length === 0 && <div className="empty-state">No requests with status {allStatus}. <button type="button" className="filter-clear" onClick={() => setAllStatus('')}>Clear filter</button></div>}
+          {allReqState === 'ready' && allFiltered.length > 0 && <nav className="pagination" aria-label="All requests pagination"><span className="page-info">{(allSafePage - 1) * allPageSize + 1}–{Math.min(allSafePage * allPageSize, allFiltered.length)} of {allFiltered.length}</span><div className="page-controls"><button type="button" className="page-btn" aria-label="Previous page" disabled={allSafePage === 1} onClick={() => setAllPage(allSafePage - 1)}>‹</button>{pageList(allSafePage, allTotalPages).map((n, i) => n === '…' ? <span key={`e${i}`} className="page-gap">…</span> : <button type="button" key={n} className={`page-btn ${n === allSafePage ? 'current' : ''}`} aria-current={n === allSafePage ? 'page' : undefined} aria-label={`Page ${n}`} onClick={() => setAllPage(n)}>{n}</button>)}<button type="button" className="page-btn" aria-label="Next page" disabled={allSafePage === allTotalPages} onClick={() => setAllPage(allSafePage + 1)}>›</button></div><label className="page-size">Rows<select aria-label="Rows per page" value={allPageSize} onChange={(e) => setAllPageSize(Number(e.target.value))}>{PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}</select></label></nav>}
         </section>}
 
         {/* ── DECISION LOG PAGE ─────────────────────────────────────── */}
@@ -333,9 +346,33 @@ export function GroupBookingDashboard() {
     <aside className={`agent-panel ${panelOpen ? '' : 'panel-collapsed'}`}>
       <button type="button" className="panel-toggle-btn" aria-label={panelOpen ? 'Collapse assistant' : 'Expand assistant'} onClick={() => setPanelOpen((o) => !o)}>{panelOpen ? <ChevronRight size={16}/> : <ChevronLeft size={16}/>}</button>
       {panelOpen && <>
-      <div className="agent-head"><div className="agent-icon"><Bot size={18}/></div><div><b>Booking assistant</b><span><i className="live-dot"/> Ready to help</span></div></div>
-      <div className="agent-body"><div className="agent-intro"><div className="agent-spark"><Sparkles size={15}/></div><b>Your decision copilot</b><p>Ask me to explain a recommendation or explore a what-if scenario.</p></div><div className="chat-context"><span>ACTIVE REQUEST</span><b>{selected ? `${selected.request_id} · ${route(selected.ond)}` : '—'}</b><span>{pax} passengers · {fmtDate(selected?.departure_dt ?? null)}</span></div><div className="suggestions-label">TRY ASKING</div><button className="suggestion" disabled={chatBusy} onClick={() => ask('Why this recommendation?')}>Why this recommendation?</button><button className="suggestion" disabled={chatBusy} onClick={() => ask('What if we raise the fare by 5%?')}>What if we raise the fare?</button><button className="suggestion" onClick={draftCounteroffer}>Draft a counteroffer</button>{answer && <div className="agent-answer"><div><Sparkles size={13}/> ASSISTANT</div><article className="md" aria-live="polite"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></article></div>}{counterofferDraft && <section ref={draftRef} className="counteroffer-card" aria-label="Counteroffer draft"><div className="counteroffer-card-head"><div><b>Counteroffer email</b><span>{emailSent ? 'SENT' : 'DRAFT · NOT SENT'}</span></div><FileText size={15}/></div><label className="sr-only" htmlFor="counteroffer-draft">Editable counteroffer message</label><textarea id="counteroffer-draft" value={counterofferDraft} onChange={(event) => { setCounterofferDraft(event.target.value); setEmailSent(false) }}/><div className="counteroffer-actions"><button type="button" className="copy-draft-button" onClick={copyCounteroffer}><Copy size={13}/> Copy</button><div className="send-email-row"><input className="email-input" type="email" placeholder="Recipient email…" value={recipientEmail} onChange={(e) => { setRecipientEmail(e.target.value); setEmailSent(false) }} aria-label="Recipient email address"/><button type="button" className={`send-email-button ${emailSent ? 'is-sent' : ''}`} onClick={sendEmail} disabled={emailSending || !recipientEmail || emailSent}>{emailSent ? <><Check size={13}/> Sent</> : emailSending ? 'Sending…' : <><Send size={13}/> Send</>}</button></div></div>{detail?.agent_email && <p className="counteroffer-note agent-email-note"><Check size={10}/> Recipient pre-filled from agent profile ({detail.agent_email})</p>}<p className="counteroffer-note">Review and edit before sending. All sends are logged to the audit trail.</p></section>}</div>
-      <form className="chat-compose" onSubmit={(e) => { e.preventDefault(); const m = chat; setChat(''); ask(m) }}><input aria-label="Ask the booking assistant" value={chat} onChange={(e) => setChat(e.target.value)} placeholder="Ask about this request…"/><button aria-label="Send message" type="submit" disabled={chatBusy}><Send size={15}/></button></form>
+      <div className="agent-head">
+        <div className="agent-icon"><Bot size={22}/></div>
+        <div className="agent-title"><b>AI Booking Assistant</b><span>Explains · Simulates · Drafts</span></div>
+        <span className="agent-online"><i className="live-dot"/> Online</span>
+        <div className="agent-context"><span className="agent-context-label">Discussing</span><b>{selected ? `${selected.request_id} · ${route(selected.ond)}` : 'No request selected'}</b>{selected && <span>{pax} pax · {fmtDate(selected.departure_dt)}</span>}</div>
+      </div>
+      <div className="agent-body" ref={bodyRef}>
+        {thread.length === 0 && !typing && <div className="agent-hero">
+          <div className="agent-hero-icon"><Sparkles size={26}/></div>
+          <h3>How can I help with {selected ? selected.request_id : 'this request'}?</h3>
+          <p>I use the model's scores and scenarios, so every number is traceable.</p>
+          <div className="agent-cards">
+            <button type="button" className="agent-card" disabled={chatBusy || !selectedId} onClick={() => ask('Why this recommendation?')}><span className="agent-card-icon"><Sparkles size={16}/></span><span><b>Why this recommendation?</b><small>Plain-language reasoning behind the decision</small></span></button>
+            <button type="button" className="agent-card" disabled={chatBusy || !selectedId} onClick={() => ask('What if we raise the fare by 5%?')}><span className="agent-card-icon"><Activity size={16}/></span><span><b>What if we raise the fare?</b><small>Simulate a +5% fare and compare outcomes</small></span></button>
+            <button type="button" className="agent-card" disabled={chatBusy || !selectedId} onClick={draftCounteroffer}><span className="agent-card-icon"><FileText size={16}/></span><span><b>Draft a counteroffer</b><small>Generate an email for the travel agent</small></span></button>
+          </div>
+        </div>}
+        <div className="thread" aria-live="polite">
+          {thread.map((m, i) => m.role === 'user'
+            ? <div key={i} className="msg user"><div className="bubble">{m.text}</div></div>
+            : <div key={i} className="msg assistant"><span className="msg-avatar"><Bot size={15}/></span><div className="bubble"><article className="md"><ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown></article></div></div>)}
+          {typing && <div className="msg assistant"><span className="msg-avatar"><Bot size={15}/></span><div className="bubble typing" aria-label="Assistant is thinking"><i/><i/><i/></div></div>}
+        </div>
+        {counterofferDraft && <section ref={draftRef} className="counteroffer-card" aria-label="Counteroffer draft"><div className="counteroffer-card-head"><div><b>Counteroffer email</b><span>{emailSent ? 'SENT' : 'DRAFT · NOT SENT'}</span></div><FileText size={15}/></div><label className="sr-only" htmlFor="counteroffer-draft">Editable counteroffer message</label><textarea id="counteroffer-draft" value={counterofferDraft} onChange={(event) => { setCounterofferDraft(event.target.value); setEmailSent(false) }}/><div className="counteroffer-actions"><button type="button" className="copy-draft-button" onClick={copyCounteroffer}><Copy size={13}/> Copy</button><div className="send-email-row"><input className="email-input" type="email" placeholder="Recipient email…" value={recipientEmail} onChange={(e) => { setRecipientEmail(e.target.value); setEmailSent(false) }} aria-label="Recipient email address"/><button type="button" className={`send-email-button ${emailSent ? 'is-sent' : ''}`} onClick={sendEmail} disabled={emailSending || !recipientEmail || emailSent}>{emailSent ? <><Check size={13}/> Sent</> : emailSending ? 'Sending…' : <><Send size={13}/> Send</>}</button></div></div>{detail?.agent_email && <p className="counteroffer-note agent-email-note"><Check size={10}/> Recipient pre-filled from agent profile ({detail.agent_email})</p>}<p className="counteroffer-note">Review and edit before sending. All sends are logged to the audit trail.</p></section>}
+      </div>
+      {thread.length > 0 && <div className="quick-actions" role="group" aria-label="Suggested questions"><button type="button" disabled={chatBusy} onClick={() => ask('Why this recommendation?')}>Why this?</button><button type="button" disabled={chatBusy} onClick={() => ask('What if we raise the fare by 5%?')}>Raise fare 5%</button><button type="button" disabled={chatBusy} onClick={() => ask('What are the main risks?')}>Key risks</button><button type="button" disabled={chatBusy} onClick={draftCounteroffer}>Draft counteroffer</button></div>}
+      <form className="chat-compose" onSubmit={(e) => { e.preventDefault(); const m = chat; setChat(''); ask(m) }}><input aria-label="Ask the booking assistant" value={chat} onChange={(e) => setChat(e.target.value)} placeholder={selected ? `Ask about ${selected.request_id}…` : 'Select a request to start…'} disabled={!selectedId}/><button aria-label="Send message" type="submit" disabled={chatBusy || !chat.trim()}><Send size={17}/></button></form>
       <div className="agent-disclaimer">AI responses are based on model scenarios, not live PSS updates.</div>
       </>}
     </aside>
@@ -352,3 +389,54 @@ function HeatRow({ seats, fares, heat, color }: { seats: number; fares: number[]
 function Metric({label,value,change,icon,tone,positive}:{label:string;value:string;change:string;icon:React.ReactNode;tone:string;positive?:boolean}) { return <div className="metric-card"><div className={`metric-icon ${tone}`}>{icon}</div><span className="metric-label">{label}</span><strong>{value}</strong><span className={`metric-change ${positive?'up':''}`}>{positive && <ArrowUpRight size={13}/>} {change}</span></div> }
 function Offer({label,value,suffix,highlight}:{label:string;value:string;suffix:string;highlight?:boolean}) {return <div className={`offer ${highlight?'highlight':''}`}><span>{label}</span><b>{value}</b><small>{suffix}</small></div>}
 function Driver({label,detail,value,positive,negative,width}:{label:string;detail:string;value:string;positive?:boolean;negative?:boolean;width:string}) {return <div className="driver"><div className="driver-head"><span><b>{label}</b><small>{detail}</small></span><em className={positive?'driver-positive':negative?'driver-negative':''}>{value}</em></div><div className="driver-track"><i className={positive?'driver-fill-positive':negative?'driver-fill-negative':''} style={{width}}/></div></div>}
+
+const statusSlug = (st: string) => st.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+
+function StatusBadge({ status }: { status: string }) {
+  return <span className={`status ${statusSlug(status)}`}><i className="status-dot" aria-hidden="true"/>{status}</span>
+}
+
+function StatusFilter({ label, value, onChange, total, options }: { label: string; value: string; onChange: (v: string) => void; total: number; options: { value: string; count: number }[] }) {
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(0)
+  const wrap = useRef<HTMLDivElement>(null)
+  const btn = useRef<HTMLButtonElement>(null)
+  const items = [{ value: '', count: total }, ...options]
+  const current = items.find((o) => o.value === value) ?? items[0]
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false) }
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
+  }, [open])
+
+  function choose(v: string) { onChange(v); setOpen(false); btn.current?.focus() }
+  function onKey(e: React.KeyboardEvent) {
+    if (!open) { if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setActive(Math.max(0, items.findIndex((o) => o.value === value))); setOpen(true) } return }
+    if (e.key === 'Escape') { e.preventDefault(); setOpen(false); btn.current?.focus() }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); setActive((i) => Math.min(items.length - 1, i + 1)) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((i) => Math.max(0, i - 1)) }
+    else if (e.key === 'Home') { e.preventDefault(); setActive(0) }
+    else if (e.key === 'End') { e.preventDefault(); setActive(items.length - 1) }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); choose(items[active].value) }
+    else if (e.key === 'Tab') setOpen(false)
+  }
+
+  return <div className="sf" ref={wrap} onKeyDown={onKey}>
+    <button ref={btn} type="button" className={`sf-trigger ${value ? 'active' : ''}`} aria-label={label} aria-haspopup="listbox" aria-expanded={open} onClick={() => { setActive(Math.max(0, items.findIndex((o) => o.value === value))); setOpen((o) => !o) }}>
+      {value ? <i className={`status-dot ${statusSlug(value)}`} aria-hidden="true"/> : <ListFilter size={14} aria-hidden="true"/>}
+      <span className="sf-label">{value || 'All statuses'}</span>
+      <span className="sf-count">{current.count}</span>
+      <ChevronDown size={14} className="sf-chevron" aria-hidden="true"/>
+    </button>
+    {open && <ul className="sf-menu" role="listbox" aria-label={label}>
+      {items.map((o, i) => <li key={o.value || 'all'} role="option" aria-selected={o.value === value} className={`sf-option ${i === active ? 'focus' : ''} ${o.value === value ? 'selected' : ''}`} onMouseEnter={() => setActive(i)} onClick={() => choose(o.value)}>
+        {o.value ? <i className={`status-dot ${statusSlug(o.value)}`} aria-hidden="true"/> : <i className="status-dot all" aria-hidden="true"/>}
+        <span className="sf-opt-label">{o.value || 'All statuses'}</span>
+        <span className="sf-opt-count">{o.count}</span>
+        {o.value === value && <Check size={14} className="sf-check" aria-hidden="true"/>}
+      </li>)}
+    </ul>}
+  </div>
+}
