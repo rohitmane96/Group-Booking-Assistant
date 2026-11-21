@@ -185,13 +185,14 @@ def run_optimizer(
     else:
         recommendation = "Counteroffer"
 
-    # --- Baseline contribution (rule-based) ---
+    # --- Baseline contribution (historical per-OND accepted fare) ---
     from engines.baseline import baseline_decision
     bl = baseline_decision(
         group_size=requested_seats,
         load_factor=request_features.get("load_factor", 0.5),
         ref_fare=ref_fare,
         capacity=capacity,
+        ond=ond,
         policy=policy,
     )
     baseline_ec = compute_expected_contribution(

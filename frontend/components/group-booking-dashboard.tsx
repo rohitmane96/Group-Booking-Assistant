@@ -49,9 +49,13 @@ export function GroupBookingDashboard() {
   const [deadline, setDeadline] = useState(7)
   const [heatDeadline, setHeatDeadline] = useState(7)
   const [query, setQuery] = useState('')
-  const [status, setStatus] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [routeFilter, setRouteFilter] = useState('')
+  const [flightFilter, setFlightFilter] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(8)
+  const [queueCollapsed, setQueueCollapsed] = useState(false)
+  const [scoreMap, setScoreMap] = useState<Record<string, number>>({})
   const [greeting, setGreeting] = useState('Welcome')
   const searchRef = useRef<HTMLInputElement>(null)
   const [decision, setDecision] = useState<'approve' | 'edit' | 'reject' | null>(null)
@@ -114,6 +118,7 @@ export function GroupBookingDashboard() {
       setScore(s); setFare(Math.round(s.best_fare)); setSeats(s.best_seats)
       const dl = DEADLINES.includes(s.best_deadline_days) ? s.best_deadline_days : 7
       setDeadline(dl); setHeatDeadline(dl)
+      setScoreMap((m) => ({ ...m, [selectedId]: s.p_convert_at_best }))
     }).catch((e) => alive && setScoreError(errMsg(e))).finally(() => alive && setScoring(false))
     return () => { alive = false }
   }, [selectedId, retryTick])
@@ -150,7 +155,7 @@ export function GroupBookingDashboard() {
   }, [activePage, allReqState])
 
   // reset to first page whenever the result set changes
-  useEffect(() => { setPage(1) }, [query, status, pageSize])
+  useEffect(() => { setPage(1) }, [query, statusFilter, routeFilter, flightFilter, pageSize])
   useEffect(() => { setAllPage(1) }, [allStatus, allPageSize])
   // ⌘K / Ctrl+K focuses search
   useEffect(() => {
@@ -170,13 +175,22 @@ export function GroupBookingDashboard() {
   const allTotalPages = Math.max(1, Math.ceil(allFiltered.length / allPageSize))
   const allSafePage = Math.min(allPage, allTotalPages)
   const allRows = allFiltered.slice((allSafePage - 1) * allPageSize, allSafePage * allPageSize)
-  const statusCounts = useMemo(() => requests.reduce<Record<string, number>>((acc, r) => { acc[r.status] = (acc[r.status] ?? 0) + 1; return acc }, {}), [requests])
-  const statuses = useMemo(() => Object.keys(statusCounts).sort(), [statusCounts])
-  const filtered = useMemo(() => requests.filter((r) => (!status || r.status === status) && `${r.ond} ${r.request_id} ${r.group_request_id} ${r.flight_number}`.toLowerCase().includes(query.toLowerCase())), [requests, query, status])
+  const statuses = useMemo(() => [...new Set(requests.map((r) => r.status))].sort(), [requests])
+  const routes = useMemo(() => [...new Set(requests.map((r) => r.ond))].sort(), [requests])
+  const flights = useMemo(() => [...new Set(requests.map((r) => r.flight_number).filter(Boolean))].sort(), [requests])
+  const filtered = useMemo(() => requests.filter((r) =>
+    (!statusFilter || r.status === statusFilter) &&
+    (!routeFilter || r.ond === routeFilter) &&
+    (!flightFilter || r.flight_number === flightFilter) &&
+    `${r.ond} ${r.request_id} ${r.group_request_id} ${r.flight_number}`.toLowerCase().includes(query.toLowerCase())
+  ), [requests, query, statusFilter, routeFilter, flightFilter])
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const safePage = Math.min(page, totalPages)
   const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize)
-  const clearFilters = () => { setStatus(''); setQuery('') }
+  const hasFilters = !!(statusFilter || routeFilter || flightFilter || query)
+  const clearFilters = () => { setStatusFilter(''); setRouteFilter(''); setFlightFilter(''); setQuery('') }
+  const pConvertClass = (p: number | undefined) => { if (p == null) return ''; if (p >= 0.35) return 'prob-high'; if (p >= 0.12) return 'prob-mid'; return 'prob-low' }
+  const statusCounts = useMemo(() => requests.reduce<Record<string, number>>((acc, r) => { acc[r.status] = (acc[r.status] ?? 0) + 1; return acc }, {}), [requests])
 
   const curve = score?.fare_curve ?? []
   const fareMin = curve.length ? curve[0].fare : Math.round(refFare * 0.7)
@@ -282,15 +296,101 @@ export function GroupBookingDashboard() {
 
         {/* ── OPEN REQUESTS PAGE ────────────────────────────────────── */}
         {activePage === 'requests' && <>
-        <div className="content-grid">
-          <section className="panel queue-panel"><div className="panel-head"><div><div className="panel-title">Requests to review <span className="count-badge">{filtered.length === requests.length ? total : `${filtered.length} of ${requests.length}`}</span></div><div className="panel-caption">Open group requests</div></div><StatusFilter label="Filter requests by status" value={status} onChange={setStatus} total={requests.length} options={statuses.map((st) => ({ value: st, count: statusCounts[st] }))}/></div>
-            <label className="search-box"><Search size={15}/><input ref={searchRef} aria-label="Search requests" placeholder="Search requests…" value={query} onChange={(e) => setQuery(e.target.value)}/><kbd>Ctrl K</kbd></label>
-            <div className="request-list">{pageRows.map((r) => <button key={r.request_id} className={`request-row ${selectedId === r.request_id ? 'selected' : ''}`} onClick={() => setSelectedId(r.request_id)}><span className="request-avatar">{initials(r.ond)}</span><span className="request-main"><span className="request-route">{route(r.ond)}<span className="request-id">{r.request_id}</span></span><span className="request-meta">{r.flight_number} · {r.group_size} passengers</span></span><span className="request-side"><StatusBadge status={r.status}/><span className="request-date"><Clock3 size={12}/>{daysLeft(r.departure_dt) ?? '—'}d left</span></span></button>)}{listState === 'loading' && Array.from({ length: 5 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true"/>)}{listState === 'ready' && filtered.length === 0 && <div className="empty-state">No requests match{status ? ` ${status}` : ''}{query ? ` "${query}"` : ''}. <button type="button" className="filter-clear" onClick={clearFilters}>Clear filters</button></div>}</div>
-            {filtered.length > 0 && <nav className="pagination" aria-label="Requests pagination"><span className="page-info">{(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filtered.length)} of {filtered.length}</span><div className="page-controls"><button type="button" className="page-btn" aria-label="Previous page" disabled={safePage === 1} onClick={() => setPage(safePage - 1)}>‹</button>{pageList(safePage, totalPages).map((n, i) => n === '…' ? <span key={`e${i}`} className="page-gap">…</span> : <button type="button" key={n} className={`page-btn ${n === safePage ? 'current' : ''}`} aria-current={n === safePage ? 'page' : undefined} aria-label={`Page ${n}`} onClick={() => setPage(n)}>{n}</button>)}<button type="button" className="page-btn" aria-label="Next page" disabled={safePage === totalPages} onClick={() => setPage(safePage + 1)}>›</button></div><label className="page-size">Rows<select aria-label="Rows per page" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>{PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}</select></label></nav>}
-          </section>
-          <section className="panel recommendation-panel"><div className="panel-head"><div><div className="panel-title">AI recommendation <span className="ai-tag"><Sparkles size={11}/> ASSIST</span></div><div className="panel-caption">{selected ? `${selected.request_id} · ${route(selected.ond)} · ${fmtDate(selected.departure_dt)}` : 'No request selected'}</div></div></div>
+
+        {/* Queue list (shown when not collapsed) */}
+        {!queueCollapsed && <section className="panel queue-panel" style={{marginBottom:14}}>
+          <div className="panel-head">
+            <div><div className="panel-title">Requests to review <span className="count-badge">{filtered.length === requests.length ? total : `${filtered.length} of ${requests.length}`}</span></div><div className="panel-caption">Click a request to review and act on it</div></div>
+          </div>
+          {/* Dropdown filters */}
+          <div className="filter-dropdowns">
+            <StatusFilter label="Filter requests by status" value={statusFilter} onChange={setStatusFilter} total={requests.length} options={statuses.map((st) => ({ value: st, count: statusCounts[st] }))}/>
+            <div className="filter-select-wrap">
+              <Plane size={12}/>
+              <select aria-label="Filter by route" value={routeFilter} onChange={(e) => setRouteFilter(e.target.value)}>
+                <option value="">All routes</option>
+                {routes.map((r) => <option key={r} value={r}>{route(r)}</option>)}
+              </select>
+            </div>
+            <div className="filter-select-wrap">
+              <Activity size={12}/>
+              <select aria-label="Filter by flight" value={flightFilter} onChange={(e) => setFlightFilter(e.target.value)}>
+                <option value="">All flights</option>
+                {flights.map((f) => <option key={f} value={f}>{f}</option>)}
+              </select>
+            </div>
+            <label className="search-box inline-search"><Search size={13}/><input ref={searchRef} aria-label="Search requests" placeholder="Search…" value={query} onChange={(e) => setQuery(e.target.value)}/><kbd>Ctrl K</kbd></label>
+            {hasFilters && <button type="button" className="filter-clear" onClick={clearFilters}>Clear</button>}
+          </div>
+          {/* Prob legend */}
+          <div className="prob-legend"><span className="prob-dot prob-high"/>High conv. (&ge;35%)<span className="prob-dot prob-mid"/>Medium (12–35%)<span className="prob-dot prob-low"/>Low (&lt;12%)<span className="prob-dot prob-none"/>Not scored</div>
+          <div className="request-list">
+            {pageRows.map((r) => {
+              const p = scoreMap[r.request_id]
+              return <button key={r.request_id} className={`request-row ${selectedId === r.request_id ? 'selected' : ''} ${pConvertClass(p)}`} onClick={() => { setSelectedId(r.request_id); setQueueCollapsed(true) }}>
+                <span className="request-avatar">{initials(r.ond)}</span>
+                <span className="request-main">
+                  <span className="request-route">{route(r.ond)}<span className="request-id">{r.request_id}</span></span>
+                  <span className="request-meta">{r.flight_number} · {r.group_size} pax · {aed(r.quoted_fare_per_pax)}/pax</span>
+                </span>
+                <span className="request-side">
+                  <StatusBadge status={r.status}/>
+                  <span className="request-date"><Clock3 size={12}/>{daysLeft(r.departure_dt) ?? '—'}d left</span>
+                  {p != null && <span className={`prob-badge ${pConvertClass(p)}`}>{pct(p)}</span>}
+                </span>
+              </button>
+            })}
+            {listState === 'loading' && Array.from({ length: 5 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true"/>)}
+            {listState === 'ready' && filtered.length === 0 && <div className="empty-state">No requests match current filters. <button type="button" className="filter-clear" onClick={clearFilters}>Clear filters</button></div>}
+          </div>
+          {filtered.length > 0 && <nav className="pagination" aria-label="Requests pagination"><span className="page-info">{(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filtered.length)} of {filtered.length}</span><div className="page-controls"><button type="button" className="page-btn" aria-label="Previous page" disabled={safePage === 1} onClick={() => setPage(safePage - 1)}>&#8249;</button>{pageList(safePage, totalPages).map((n, i) => n === '…' ? <span key={`e${i}`} className="page-gap">…</span> : <button type="button" key={n} className={`page-btn ${n === safePage ? 'current' : ''}`} aria-current={n === safePage ? 'page' : undefined} onClick={() => setPage(n)}>{n}</button>)}<button type="button" className="page-btn" aria-label="Next page" disabled={safePage === totalPages} onClick={() => setPage(safePage + 1)}>&#8250;</button></div><label className="page-size">Rows<select aria-label="Rows per page" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>{PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}</select></label></nav>}
+        </section>}
+
+        {/* Full detail view when queue is collapsed */}
+        {queueCollapsed && selectedId && <section className="panel request-detail-card">
+          <div className="request-detail-nav">
+            <button type="button" className="back-btn" onClick={() => setQueueCollapsed(false)}><ChevronLeft size={14}/> All requests</button>
+            <div className="request-detail-nav-right">
+              {scoring && <span className="scoring-badge">Scoring…</span>}
+              {score && <span className={`prob-badge large ${pConvertClass(score.p_convert_at_best)}`}>{pct(score.p_convert_at_best)} P(convert)</span>}
+              {(detail?.status ?? selected?.status) ? <StatusBadge status={(detail?.status ?? selected?.status) as string}/> : <span>—</span>}
+            </div>
+          </div>
+          <div className="request-detail-title">
+            <h2>{route(detail?.ond ?? selected?.ond ?? '')}</h2>
+            <span className="request-detail-ids">{detail?.request_id ?? selected?.request_id} <i>·</i> {detail?.group_request_id ?? '—'}</span>
+          </div>
+          <div className="request-detail-grid">
+            <DetailField label="Flight" value={detail?.flight_number ?? selected?.flight_number ?? '—'}/>
+            <DetailField label="Departure" value={fmtDate(detail?.departure_dt ?? selected?.departure_dt ?? null)}/>
+            <DetailField label="Dep. time" value={fmtTime(detail?.departure_dt ?? selected?.departure_dt ?? null)}/>
+            <DetailField label="Days to dep." value={left != null ? `${left} days` : '—'}/>
+            <DetailField label="Trip type" value={detail?.trip_type ?? '—'}/>
+            <DetailField label="Group size" value={detail?.group_size != null ? `${detail.group_size} pax` : selected?.group_size ? `${selected.group_size} pax` : '—'}/>
+            <DetailField label="Agent code" value={detail?.agent_code ?? '—'}/>
+            <DetailField label="Agent email" value={detail?.agent_email ?? '—'}/>
+            <DetailField label="Quoted fare" value={aed(detail?.quoted_fare_per_pax ?? selected?.quoted_fare_per_pax)}/>
+            <DetailField label="Ref. fare" value={aed(detail?.ref_fare ?? selected?.ref_fare)}/>
+            <DetailField label="Fare ratio" value={detail?.fare_ratio != null ? `${(detail.fare_ratio * 100).toFixed(0)}%` : '—'}/>
+            <DetailField label="Competitor fare" value={aed(detail?.competitor_fare)}/>
+            <DetailField label="Load factor" value={detail?.load_factor != null ? `${Math.round(detail.load_factor * 100)}%` : '—'}/>
+            <DetailField label="Seats available" value={detail?.seats_available != null ? String(detail.seats_available) : '—'}/>
+            <DetailField label="Lead time" value={detail?.lead_time != null ? `${Math.round(detail.lead_time)} days` : '—'}/>
+            <DetailField label="Agent conv. rate" value={detail ? pct(detail.agent_conv_rate) : '—'}/>
+            <DetailField label="Route conv. rate" value={detail ? pct(detail.route_conv_rate) : '—'}/>
+            <DetailField label="Agent prior reqs." value={detail?.agent_prior_requests != null ? String(detail.agent_prior_requests) : '—'}/>
+            <DetailField label="Route prior reqs." value={detail?.route_prior_requests != null ? String(detail.route_prior_requests) : '—'}/>
+            <DetailField label="Options" value={detail?.num_options != null ? String(detail.num_options) : '—'}/>
+          </div>
+        </section>}
+
+        {/* AI recommendation + action buttons */}
+        <div style={{marginBottom:14}}>
+          <section className="panel recommendation-panel">
+            <div className="panel-head"><div><div className="panel-title">AI recommendation <span className="ai-tag"><Sparkles size={11}/> ASSIST</span></div><div className="panel-caption">{selected ? `${selected.request_id} · ${route(selected.ond)} · ${fmtDate(selected.departure_dt)}` : 'No request selected'}</div></div></div>
             {scoring && <div className="empty-state">Scoring request — this can take a few seconds…</div>}
             {scoreError && <div className="empty-state" role="alert">{scoreError} <button className="subtle-button" onClick={() => setRetryTick((n) => n + 1)}>Retry</button></div>}
+            {!selectedId && !scoring && <div className="empty-state">Select a request from the list to see the AI recommendation.</div>}
             {score && <>
             <div className="recommendation-banner"><div className="recommend-icon" style={{ background: recColor }}><Sparkles size={17}/></div><div><div className="recommend-label">RECOMMENDED ACTION</div><strong style={{ color: recColor }}>{REC_LABELS[score.recommendation] ?? score.recommendation}</strong></div><span className="confidence">{pct(score.p_convert_base)} base P(convert)</span></div>
             <div className="offer-grid"><Offer label="Proposed fare" value={aed(fare)} suffix="/ passenger"/><Offer label="Seat allocation" value={`${seats}`} suffix={`of ${pax} seats`}/><Offer label="Confirmation deadline" value={`${deadline} days`} suffix="after quote"/><Offer label="Conversion probability" value={pct(probability)} suffix="model estimate" highlight/></div>
@@ -301,6 +401,9 @@ export function GroupBookingDashboard() {
             </>}
           </section>
         </div>
+
+        {/* Analysis + inventory (shown when request is selected and detail is open) */}
+        {selectedId && queueCollapsed && <>
         <div className="analysis-grid">
           <section className="panel analysis-panel"><div className="panel-head"><div><div className="panel-title">Scenario analysis</div><div className="panel-caption">Adjust the offer to explore the trade-off</div></div><span className="model-tag"><span className="live-dot"/> MODEL-BASED</span></div>
             {score ? <>
@@ -325,6 +428,7 @@ export function GroupBookingDashboard() {
               <span/>{heatFares.map((f, i) => <span key={f} style={{ textAlign: 'center', fontSize: 11 }}>{i % 2 === 0 ? f : ''}</span>)}
             </div> : <div className="empty-state">{scoring ? 'Waiting for score…' : 'No data'}</div>}</section>
         </div>
+        </>}
         </>}
 
         {/* ── ALL REQUESTS PAGE ─────────────────────────────────────── */}
@@ -440,3 +544,4 @@ function StatusFilter({ label, value, onChange, total, options }: { label: strin
     </ul>}
   </div>
 }
+function DetailField({ label, value }: { label: string; value: string }) { return <div className="detail-field"><span>{label}</span><b>{value}</b></div> }
