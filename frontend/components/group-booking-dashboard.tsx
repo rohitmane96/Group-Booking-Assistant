@@ -1,13 +1,13 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy, FileText, Filter, History, List, Plane, Search, Send, ShieldCheck, Sparkles, X } from 'lucide-react'
+import { Armchair, AlertCircle, ArrowUpRight, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Clock3, Copy, FileText, Filter, History, LayoutDashboard, List, Plane, RefreshCw, Search, Send, ShieldCheck, Sparkles, TrendingDown, TrendingUp, Wallet, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { api, ApiError, type ApprovalRequest, type AuditEntry, type ChatMessage, type RequestAllSummary, type RequestDetail, type RequestSummary, type ScenarioResponse, type ScoreResponse, type SendCounterOfferRequest } from '@/lib/api'
+import { api, ApiError, type ApprovalRequest, type AuditEntry, type ChatMessage, type ExecutiveSummary, type Opportunity, type OpportunityCategory, type OpportunityData, type StrategyComparison, type RequestAllSummary, type RequestDetail, type RequestSummary, type ScenarioResponse, type ScoreResponse, type SendCounterOfferRequest } from '@/lib/api'
 
-type Page = 'requests' | 'all-requests' | 'audit'
-const PAGE_LABELS: Record<Page, string> = { requests: 'Open Requests', 'all-requests': 'All Requests', audit: 'Decision Log' }
+type Page = 'overview' | 'requests' | 'all-requests' | 'audit'
+const PAGE_LABELS: Record<Page, string> = { overview: 'Overview', requests: 'Open Requests', 'all-requests': 'All Requests', audit: 'Decision Log' }
 
 const DEADLINES = [3, 7, 14]
 const PAGE_SIZES = [5, 8, 10, 20]
@@ -55,13 +55,13 @@ export function GroupBookingDashboard() {
   const [pageSize, setPageSize] = useState(8)
   const [queueCollapsed, setQueueCollapsed] = useState(false)
   const [scoreMap, setScoreMap] = useState<Record<string, number>>({})
-  const [greeting] = useState('')
+  // greeting/today set in useEffect below
   const searchRef = useRef<HTMLInputElement>(null)
   const [decision, setDecision] = useState<'approve' | 'edit' | 'reject' | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [audit, setAudit] = useState<AuditEntry[]>([])
-  const [today] = useState('')
+  // today set in useEffect below
   const [chat, setChat] = useState('')
   const [answer, setAnswer] = useState('')
   const [chatHistory, setChatHistory] = useState<ChatMessage[] | null>(null)
@@ -72,7 +72,19 @@ export function GroupBookingDashboard() {
   const [emailSent, setEmailSent] = useState(false)
   const noticeTimer = useRef<number | undefined>(undefined)
   const draftRef = useRef<HTMLElement | null>(null)
-  const [activePage, setActivePage] = useState<Page>('requests')
+  const [activePage, setActivePage] = useState<Page>('overview')
+  const [summary, setSummary] = useState<ExecutiveSummary | null>(null)
+  const [summaryState, setSummaryState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [summaryError, setSummaryError] = useState('')
+  const [summaryTick, setSummaryTick] = useState(0)
+  const [comparison, setComparison] = useState<StrategyComparison | null>(null)
+  const [comparisonState, setComparisonState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [comparisonError, setComparisonError] = useState('')
+  const [oppData, setOppData] = useState<OpportunityData | null>(null)
+  const [oppState, setOppState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [oppError, setOppError] = useState('')
+  const [today, setToday] = useState('')
+  const [greeting, setGreeting] = useState('')
   const [panelOpen, setPanelOpen] = useState(true)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(224)
@@ -109,6 +121,27 @@ let alive = true
     const poll = window.setInterval(load, 60_000)
     return () => { alive = false; window.clearInterval(poll) }
   }, [])
+
+  // greeting + today date
+  useEffect(() => {
+    const hr = new Date().getHours()
+    setGreeting(hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening')
+    setToday(new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).toUpperCase())
+  }, [])
+
+  // load overview summary data whenever queue or audit changes
+  useEffect(() => {
+    if (listState !== 'ready') return
+    let alive = true
+    setSummaryState((st) => (summary ? st : 'loading'))
+    api.executiveSummary(summaryTick > 0).then((d) => { if (alive) { setSummary(d); setSummaryState('ready'); setSummaryError('') } }).catch((e) => { if (alive) { setSummaryState('error'); setSummaryError(errMsg(e)) } })
+    setComparisonState((st) => (comparison ? st : 'loading'))
+    api.strategyComparison(summaryTick > 0).then((d) => { if (alive) { setComparison(d); setComparisonState('ready'); setComparisonError('') } }).catch((e) => { if (alive) { setComparisonState('error'); setComparisonError(errMsg(e)) } })
+    setOppState((st) => (oppData ? st : 'loading'))
+    api.opportunities(summaryTick > 0).then((d) => { if (alive) { setOppData(d); setOppState('ready'); setOppError('') } }).catch((e) => { if (alive) { setOppState('error'); setOppError(errMsg(e)) } })
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listState, requests, audit.length, summaryTick])
 
   // selecting a request: detail + score
   useEffect(() => {
@@ -418,6 +451,7 @@ let alive = true
       <a className="brand" href="#dashboard" aria-label="GroupLens home"><span className="brand-mark"><Plane size={18} strokeWidth={2.2}/></span>{!sidebarCollapsed && <span>GroupLens<span className="brand-sub">GROUP BOOKING AI</span></span>}</a>
       {!sidebarCollapsed && <div className="workspace-label">WORKSPACE <ChevronDown size={13}/></div>}
       <nav aria-label="Main navigation">
+        <button type="button" className={`nav-item ${activePage === 'overview' ? 'active' : ''}`} onClick={() => setActivePage('overview')} title="Overview"><LayoutDashboard size={17}/>{!sidebarCollapsed && <> Overview</>}</button>
         <button type="button" className={`nav-item ${activePage === 'requests' ? 'active' : ''}`} onClick={() => setActivePage('requests')} title="Open requests"><FileText size={17}/>{!sidebarCollapsed && <> Open requests <span className="nav-count">{total}</span></>}{sidebarCollapsed && total > 0 && <span className="nav-count-dot"/>}</button>
         <button type="button" className={`nav-item ${activePage === 'all-requests' ? 'active' : ''}`} onClick={() => { setActivePage('all-requests'); setAllReqState((s) => s === 'error' ? 'idle' : s) }} title="All requests"><List size={17}/>{!sidebarCollapsed && <> All requests</>}</button>
         <button type="button" className={`nav-item ${activePage === 'audit' ? 'active' : ''}`} onClick={() => setActivePage('audit')} title="Decision log"><History size={17}/>{!sidebarCollapsed && <> Decision log</>}</button>
@@ -432,6 +466,13 @@ let alive = true
       <header className="topbar"><div className="breadcrumb">Revenue management <span>/</span> <b>{PAGE_LABELS[activePage]}</b></div><div className="top-actions"><span className={`api-status ${listState === 'error' ? 'error' : ''}`}><span className="live-dot"/> {listState === 'error' ? 'API unreachable' : 'Live'}</span></div></header>
       <div className="page-content">
         {listState === 'error' && <div className="empty-state" role="alert">Cannot connect to server — {listError}. Check that the API is running and NEXT_PUBLIC_API_BASE_URL is correct.</div>}
+
+        {/* ── OVERVIEW PAGE ─────────────────────────────────────────── */}
+        {activePage === 'overview' && <><div className="heading-row"><div><div className="eyebrow">{today}</div><h1>{greeting} <span className="wave">✳</span></h1><p className="subheading">Here&apos;s your group booking performance at a glance.</p></div></div>
+        <ExecutiveSummaryPanel data={summary} state={summaryState} error={summaryError} onRetry={() => setSummaryTick((n) => n + 1)}/>
+        <OpportunitiesPanel data={oppData} state={oppState} error={oppError} onRetry={() => setSummaryTick((n) => n + 1)} onOpen={(id) => { setSelectedId(id); setQueueCollapsed(true); setActivePage('requests') }} onViewAll={() => setActivePage('requests')}/>
+        <StrategyComparisonPanel data={comparison} state={comparisonState} error={comparisonError} onRetry={() => setSummaryTick((n) => n + 1)}/>
+        </>}
 
         {/* ── OPEN REQUESTS PAGE ────────────────────────────────────── */}
         {activePage === 'requests' && <>
@@ -763,6 +804,116 @@ let alive = true
     </aside>
     {notice && <div className="toast" role="status"><Check size={15}/>{notice}</div>}
   </main>
+}
+
+/* ── Overview: executive summary ────────────────────────────────────────────── */
+type KpiTone = 'brand' | 'positive' | 'negative' | 'neutral' | 'info'
+function KpiCard({ icon, label, value, caption, detail, tone = 'brand', valueTone }: { icon: React.ReactNode; label: string; value: string; caption: string; detail?: React.ReactNode; tone?: KpiTone; valueTone?: 'positive' | 'negative' }) {
+  return <article className="kpi-card" aria-label={label}><div className="kpi-head"><span className={`kpi-icon ${tone}`} aria-hidden="true">{icon}</span><h3 className="kpi-label">{label}</h3></div><div className={`kpi-value ${valueTone ?? ''} ${value === 'N/A' ? 'na' : ''}`}>{value}</div>{detail && <div className="kpi-detail">{detail}</div>}<p className="kpi-caption">{caption}</p></article>
+}
+const signedAed = (n: number) => `${n >= 0 ? '+' : '−'}${aed(Math.abs(n))}`
+const fmtPct = (n: number | null | undefined, digits = 1) => (n == null ? 'N/A' : `${n.toLocaleString(undefined, { maximumFractionDigits: digits })}%`)
+function SectionHead({ id, title, sub, action }: { id: string; title: string; sub: string; action?: React.ReactNode }) {
+  return <div className="exec-head"><div><h2 id={id} className="exec-title">{title}</h2><p className="exec-sub">{sub}</p></div>{action}</div>
+}
+function SectionError({ message, error, onRetry }: { message: string; error: string; onRetry: () => void }) {
+  return <div className="kpi-error" role="alert"><AlertCircle size={18}/><div><b>{message}</b><span>{error || 'Service temporarily unavailable'}</span></div><button type="button" className="subtle-button" onClick={onRetry}><RefreshCw size={14}/> Retry</button></div>
+}
+function ExecutiveSummaryPanel({ data, state, error, onRetry }: { data: ExecutiveSummary | null; state: 'loading' | 'ready' | 'error'; error: string; onRetry: () => void }) {
+  const head = <SectionHead id="exec-title" title="Executive summary" sub="Estimates for requests awaiting a decision"/>
+  if (state === 'loading' && !data) return <section className="exec" aria-labelledby="exec-title" aria-busy="true">{head}<div className="kpi-grid">{Array.from({ length: 4 }, (_, i) => <div key={i} className="kpi-card kpi-skeleton" aria-hidden="true"><i/><b/><u/></div>)}</div></section>
+  if (state === 'error' && !data) return <section className="exec" aria-labelledby="exec-title">{head}<SectionError message="Couldn't load the summary" error={error} onRetry={onRetry}/></section>
+  if (!data) return null
+  const empty = data.open_requests === 0; const noScore = !empty && data.ai_contribution == null
+  const inc = data.incremental_contribution; const positive = inc != null && inc >= 0
+  const pctText = data.improvement_pct == null ? null : `${data.improvement_pct >= 0 ? '+' : '−'}${fmtPct(Math.abs(data.improvement_pct))} vs baseline`
+  return <section className="exec" aria-labelledby="exec-title">
+    {head}
+    <div className="kpi-grid">
+      <KpiCard icon={<Wallet size={18}/>} label="Expected contribution" tone="brand" value={empty ? 'AED 0' : noScore ? 'N/A' : aed(data.ai_contribution)} caption="Across pending opportunities"/>
+      <KpiCard icon={positive ? <TrendingUp size={18}/> : <TrendingDown size={18}/>} label="Incremental vs baseline" tone={inc == null ? 'neutral' : positive ? 'positive' : 'negative'} value={empty || inc == null ? 'N/A' : signedAed(inc)} valueTone={inc == null ? undefined : positive ? 'positive' : 'negative'} detail={inc != null && pctText && <span className={`kpi-pill ${positive ? 'positive' : 'negative'}`}>{pctText}</span>} caption="Compared with existing pricing rules"/>
+      <KpiCard icon={<ClipboardList size={18}/>} label="Open requests" tone="info" value={data.open_requests.toLocaleString()} caption="Awaiting a decision"/>
+      <KpiCard icon={<Armchair size={18}/>} label="Seats requested" tone="neutral" value={data.seats_requested.toLocaleString()} caption="Across pending requests"/>
+    </div>
+    {state === 'error' && <p className="exec-note">Showing the last loaded figures — refresh failed.</p>}
+  </section>
+}
+
+/* ── Overview: revenue opportunities ────────────────────────────────────────── */
+type OppFilter = '' | OpportunityCategory
+const OPP_FILTERS: { key: OppFilter; label: string }[] = [{ key: '', label: 'All' }, { key: 'high_value', label: 'High value' }, { key: 'deadline_approaching', label: 'Deadline soon' }, { key: 'inventory_review', label: 'Inventory check' }]
+const OPP_SORTS = [{ value: 'priority', label: 'Priority' }, { value: 'contribution', label: 'Expected contribution' }, { value: 'conversion', label: 'Conversion' }, { value: 'departure', label: 'Departure date' }, { value: 'deadline', label: 'Confirm-by date' }]
+const OPP_STEP = 5
+const fmtShort = (iso: string | null) => { if (!iso) return '—'; const d = new Date(iso); return isNaN(+d) ? '—' : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) }
+const inDays = (n: number | null) => (n == null ? '' : n < 1 ? 'today' : `in ${Math.round(n)}d`)
+function OpportunityRow({ o, onOpen }: { o: Opportunity; onOpen: (id: string) => void }) {
+  const urgent = o.urgency === 'critical' ? 'red' : o.urgency === 'soon' ? 'amber' : ''
+  const flags: { text: string; tone: string }[] = []
+  if (o.categories.includes('high_value')) flags.push({ text: 'High value', tone: 'green' })
+  if (o.categories.includes('deadline_approaching') && o.days_to_latest_confirmation != null) flags.push({ text: `Cut-off ${inDays(o.days_to_latest_confirmation)}`, tone: o.urgency === 'critical' ? 'red' : 'amber' })
+  if (o.categories.includes('inventory_review') && o.inventory_status !== 'unknown') flags.push({ text: 'Inventory risk', tone: 'amber' })
+  return <button type="button" className="opp-row" onClick={() => onOpen(o.request_id)} aria-label={`Open request ${o.request_id}`}>
+    <span className="opp-rank">{o.priority_rank}</span>
+    <span className="opp-main"><b>{o.request_id}</b><span>{o.ond ? route(o.ond) : '—'}{o.flight_number ? ` · ${o.flight_number}` : ''}</span><small>{o.agent_code ?? 'Agent n/a'} · {o.requested_seats} pax · departs {fmtShort(o.departure_dt)}</small></span>
+    <span className="opp-money"><b className={o.expected_contribution > 0 ? 'pos' : 'neg'}>{aed(o.expected_contribution)}</b><small>{o.recommended_fare_pct != null ? `${fmtPct(o.recommended_fare_pct, 0)} of normal fare` : '—'} · {o.recommended_seats} seats</small></span>
+    <span className="opp-meta"><b>{pct(o.p_convert)}</b><small>est. conversion</small></span>
+    <span className="opp-meta"><b className={urgent}>{fmtShort(o.effective_deadline_date)}</b><small>confirm by</small></span>
+    <span className={`opp-action ${o.recommendation.toLowerCase()}`}>{o.recommendation.toUpperCase()}</span>
+    {flags.length > 0 && <span className="opp-flags">{flags.map((f) => <i key={f.text} className={`opp-flag ${f.tone}`}>{f.text}</i>)}</span>}
+  </button>
+}
+function OpportunitiesPanel({ data, state, error, onRetry, onOpen, onViewAll }: { data: OpportunityData | null; state: 'loading' | 'ready' | 'error'; error: string; onRetry: () => void; onOpen: (id: string) => void; onViewAll: () => void }) {
+  const [filter, setFilter] = useState<OppFilter>(''); const [query, setQuery] = useState(''); const [sort, setSort] = useState('priority'); const [visible, setVisible] = useState(OPP_STEP)
+  const all = data?.opportunities ?? []
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const list = all.filter((o) => (!filter || o.categories.includes(filter)) && (!q || o.request_id.toLowerCase().includes(q) || (o.agent_code ?? '').toLowerCase().includes(q)))
+    const num = (v: number | null) => (v == null ? 1e9 : v)
+    const by: Record<string, (a: Opportunity, b: Opportunity) => number> = { priority: (a, b) => a.priority_rank - b.priority_rank, contribution: (a, b) => b.expected_contribution - a.expected_contribution, conversion: (a, b) => b.p_convert - a.p_convert, departure: (a, b) => num(a.days_to_departure) - num(b.days_to_departure), deadline: (a, b) => num(a.days_to_latest_confirmation) - num(b.days_to_latest_confirmation) }
+    return [...list].sort((a, b) => by[sort](a, b) || a.priority_rank - b.priority_rank)
+  }, [all, filter, query, sort])
+  useEffect(() => { setVisible(OPP_STEP) }, [filter, query, sort])
+  const head = <SectionHead id="opp-title" title="Revenue Opportunities Requiring Attention" sub="Pending requests ranked by expected contribution, urgency and inventory risk" action={<button type="button" className="subtle-button" onClick={onViewAll}>All open requests <ChevronRight size={14}/></button>}/>
+  if (state === 'loading' && !data) return <section className="exec opp" aria-labelledby="opp-title" aria-busy="true">{head}{Array.from({ length: 3 }, (_, i) => <div key={i} className="skeleton-row" style={{ height: 72 }} aria-hidden="true"/>)}</section>
+  if (state === 'error' && !data) return <section className="exec opp" aria-labelledby="opp-title">{head}<SectionError message="Couldn't load revenue opportunities" error={error} onRetry={onRetry}/></section>
+  if (!data) return null
+  if (all.length === 0) return <section className="exec opp" aria-labelledby="opp-title">{head}<div className="empty-state">No pending group requests to prioritise right now.</div></section>
+  const count = (k: OppFilter) => (k ? all.filter((o) => o.categories.includes(k)).length : all.length)
+  const rows = shown.slice(0, visible); const clear = () => { setFilter(''); setQuery('') }
+  return <section className="exec opp" aria-labelledby="opp-title">
+    {head}
+    <div className="opp-bar">
+      <div className="opp-tabs" role="group" aria-label="Show opportunities">{OPP_FILTERS.map((f) => <button key={f.key || 'all'} type="button" className={`opp-tab ${filter === f.key ? 'on' : ''}`} aria-pressed={filter === f.key} onClick={() => setFilter(f.key)}>{f.label} <i>{count(f.key)}</i></button>)}</div>
+      <div className="opp-tools"><label className="search-box inline-search"><Search size={13}/><input aria-label="Search opportunities" placeholder="Search request or agent…" value={query} onChange={(e) => setQuery(e.target.value)}/></label><div className="filter-select-wrap"><span className="sort-label">Sort</span><select aria-label="Sort opportunities" value={sort} onChange={(e) => setSort(e.target.value)}>{OPP_SORTS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</select></div></div>
+    </div>
+    <div className="opp-list">{rows.map((o) => <OpportunityRow key={o.request_id} o={o} onOpen={onOpen}/>)}{shown.length === 0 && <div className="empty-state">No opportunities match. <button type="button" className="filter-clear" onClick={clear}>Clear filters</button></div>}</div>
+    {shown.length > OPP_STEP && <div className="opp-more"><span>Showing {rows.length} of {shown.length}</span>{visible < shown.length && <button type="button" className="subtle-button" onClick={() => setVisible((v) => v + OPP_STEP)}>Show more</button>}{visible > OPP_STEP && <button type="button" className="subtle-button" onClick={() => setVisible(OPP_STEP)}>Show less</button>}</div>}
+  </section>
+}
+
+/* ── Overview: AI vs traditional strategy ───────────────────────────────────── */
+function BarRow({ label, caption, value, max, tone }: { label: string; caption: string; value: number; max: number; tone: 'ai' | 'base' }) {
+  const w = max > 0 ? Math.max(0, Math.min(100, (Math.max(value, 0) / max) * 100)) : 0
+  return <div className="cmp-bar-row"><span className="cmp-bar-label">{label}<small>{caption}</small></span><div className="cmp-track" role="img" aria-label={`${label}: ${aed(value)}`}><i className={`cmp-fill ${tone}`} style={{ width: `${w}%` }}/></div><b className="cmp-bar-value">{aed(value)}</b></div>
+}
+function StrategyComparisonPanel({ data, state, error, onRetry }: { data: StrategyComparison | null; state: 'loading' | 'ready' | 'error'; error: string; onRetry: () => void }) {
+  const head = <SectionHead id="cmp-title" title="AI vs Traditional Strategy" sub="Expected contribution with AI optimisation compared with the existing rules"/>
+  if (state === 'loading' && !data) return <section className="exec cmp" aria-labelledby="cmp-title" aria-busy="true">{head}<div className="cmp-card kpi-skeleton" style={{ minHeight: 130 }} aria-hidden="true"><i/><b/><u/></div></section>
+  if (state === 'error' && !data) return <section className="exec cmp" aria-labelledby="cmp-title">{head}<SectionError message="Couldn't load the comparison" error={error} onRetry={onRetry}/></section>
+  if (!data) return null
+  if (data.evaluated_requests === 0) return <section className="exec cmp" aria-labelledby="cmp-title">{head}<div className="empty-state">No pending requests could be evaluated yet.</div></section>
+  const { ai, baseline: bl } = data; const inc = data.incremental_contribution ?? 0; const tone = inc > 0 ? 'positive' : inc < 0 ? 'negative' : 'neutral'
+  const max = Math.max(ai.expected_contribution, bl.expected_contribution, 1); const pctText = data.improvement_pct == null ? '' : ` (${data.improvement_pct >= 0 ? '+' : '−'}${fmtPct(Math.abs(data.improvement_pct))})`
+  return <section className="exec cmp" aria-labelledby="cmp-title">
+    {head}
+    <div className="cmp-card">
+      <div className="cmp-bars">
+        <BarRow label="AI optimizer" caption={`${data.evaluated_requests} requests · avg ${fmtPct(ai.avg_fare_pct_of_normal, 0)} of normal fare`} value={ai.expected_contribution} max={max} tone="ai"/>
+        <BarRow label="Traditional rules" caption={`avg ${fmtPct(bl.avg_fare_pct_of_normal, 0)} of normal fare`} value={bl.expected_contribution} max={max} tone="base"/>
+      </div>
+      <p className={`cmp-result ${tone}`} role="status">{inc > 0 ? <TrendingUp size={18} aria-hidden="true"/> : inc < 0 ? <TrendingDown size={18} aria-hidden="true"/> : null}<span><b>{data.incremental_contribution == null ? 'N/A' : signedAed(inc)}</b>{pctText} {inc >= 0 ? 'more' : 'less'} expected contribution with AI optimisation</span></p>
+    </div>
+  </section>
 }
 
 function FareCompareChart({ quotedFare, aiBestFare, refFare, competitorFare }: { quotedFare: number; aiBestFare: number; refFare: number; competitorFare: number }) {

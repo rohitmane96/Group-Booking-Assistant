@@ -17,6 +17,43 @@ export interface RequestSummary {
 export interface RequestListResponse { requests: RequestSummary[]; total: number }
 export interface RequestAllSummary { request_id: string; group_request_id: string; created_on: string; status: string; ond: string; group_size: number; converted: number | null }
 
+export interface ExecutiveSummary {
+  open_requests: number; seats_requested: number; scored_requests: number; unscored_requests: number
+  ai_contribution: number | null; baseline_contribution: number | null; incremental_contribution: number | null
+  improvement_pct: number | null; ai_rejected_requests: number; inventory_missing_requests: number
+  decided_excluded: number; departed_excluded: number; generated_at: string
+}
+export interface StrategyComparison {
+  evaluated_requests: number; unscored_requests: number; open_requests: number
+  decided_excluded: number; departed_excluded: number; inventory_missing_requests: number
+  requested_seats_total: number
+  ai: { expected_contribution: number; contribution_per_request: number | null; avg_fare_pct_of_normal: number | null; seats_offered: number; seats_above_requested: number; requests_above_requested: number; at_fare_ceiling: number; displacement_cost: number; decisions: Record<string, number> }
+  baseline: { expected_contribution: number; contribution_per_request: number | null; avg_fare_pct_of_normal: number | null; seats_offered: number; displacement_cost: number; decisions: Record<string, number>; load_factor_rejections: number; load_factor_unknown_requests: number; load_factor_threshold_pct: number; fare_rule: string }
+  incremental_contribution: number | null; improvement_pct: number | null
+  requests_ai_higher: number; requests_ai_lower: number
+  effects: { fare: number; seats: number; deadline: number; opportunity: number }
+  assumptions: { attrition_pct: number; fare_floor_pct: number; fare_ceiling_pct: number; deadline_options_days: number[]; baseline_deadline_days: number }
+  generated_at: string
+}
+export type OpportunityCategory = 'high_value' | 'inventory_review' | 'deadline_approaching' | 'counteroffer'
+export interface Opportunity {
+  request_id: string; agent_code: string | null; ond: string | null; flight_number: string | null
+  departure_dt: string | null; created_on: string | null; status: string; requested_seats: number
+  recommendation: string; p_convert: number; expected_contribution: number
+  recommended_fare: number; recommended_fare_pct: number | null; recommended_seats: number; recommended_deadline_days: number
+  effective_deadline_date: string | null; deadline_truncated: boolean; latest_confirmation_date: string | null
+  days_to_departure: number | null; days_to_latest_confirmation: number | null; age_days: number | null
+  urgency: 'critical' | 'soon' | 'normal' | 'unknown'; inventory_status: 'verified' | 'unknown'
+  inventory_risk: 'high' | 'medium' | 'low' | 'unknown'; inventory_reasons: string[]
+  displacement_cost: number; categories: OpportunityCategory[]; priority_score: number; priority_rank: number
+}
+export interface OpportunityData {
+  opportunities: Opportunity[]; evaluated: number; unscored: number; open_requests: number
+  decided_excluded: number; departed_excluded: number; inventory_unknown: number
+  thresholds: { critical_days: number; soon_days: number; high_value_quantile: number; weights: Record<string, number> }
+  generated_at: string
+}
+
 export interface RequestDetail {
   request_id: string
   group_request_id: string
@@ -126,4 +163,7 @@ export const api = {
   approve: (id: string, b: ApprovalRequest) => post<{ status: 'recorded'; entry: AuditEntry }>(`/requests/${enc(id)}/approve`, b),
   audit: () => call<{ entries: AuditEntry[] }>('/audit'),
   chat: (message: string, history: ChatMessage[] | null) => post<ChatResponse>('/chat', { message, history }),
+  executiveSummary: (refresh = false) => call<ExecutiveSummary>(`/summary/executive${refresh ? '?refresh=true' : ''}`),
+  strategyComparison: (refresh = false) => call<StrategyComparison>(`/summary/strategy-comparison${refresh ? '?refresh=true' : ''}`),
+  opportunities: (refresh = false) => call<OpportunityData>(`/summary/opportunities${refresh ? '?refresh=true' : ''}`),
 }

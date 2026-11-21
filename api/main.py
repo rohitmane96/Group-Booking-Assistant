@@ -462,3 +462,329 @@ if __name__ == "__main__":
     import uvicorn
     logging.basicConfig(level=logging.INFO)
     uvicorn.run("api.main:app", host="0.0.0.0", port=8000, reload=False)
+
+
+def _decided_request_ids() -> set:
+    """Requests that already have a recorded human decision (approve / edit / reject)."""
+    ids: set = set()
+    if AUDIT_LOG.exists():
+        with open(AUDIT_LOG) as f:
+            for line in f:
+                try:
+                    e = json.loads(line)
+                except Exception:
+                    continue
+                if e.get("action") in ("approve", "edit", "reject") and e.get("request_id"):
+                    ids.add(e["request_id"])
+    return ids
+
+
+def _portfolio(refresh: bool = False) -> dict:
+    """
+    Score every request that is genuinely awaiting a commercial decision (open Quoted/Submitted
+    and without a recorded human decision) ONCE, and cache the result. Both Overview summary
+    endpoints read from this so nothing is calculated twice.
+
+    Each row carries engines.comparison.evaluate_strategies output: AI and baseline are evaluated
+    on the same fare-response curve, displacement/holding cost, attrition and seat caps.
+    """
+    import time
+    from agent.tools import score_request as _score
+
+    feat = _load_features()
+    open_df = feat[feat["is_live"].fillna(False)]
+    decided = _decided_request_ids()
+    pending = open_df[~open_df["request_id"].isin(decided)]
+    # a request whose flight has already departed can no longer be actioned, so it is not pending
+    dep_ts = pd.to_datetime(pending["departure_dt"], errors="coerce")
+    departed = dep_ts.notna() & (dep_ts < pd.Timestamp.now())
+    departed_excluded = int(departed.sum())
+    pending = pending[~departed]
+
+    def _mtime(p: Path) -> float:
+        return p.stat().st_mtime if p.exists() else 0.0
+
+    key = (
+        tuple(sorted(pending["request_id"].tolist())),
+        _mtime(_DATA_DIR / "cache" / "features.parquet"),
+        _mtime(_LIVE_PATH),
+        _mtime(Path(__file__).parent.parent / "config" / "policy.yaml"),
+    )
+    now = time.time()
+    if (not refresh and _PORTFOLIO_CACHE["key"] == key
+            and now - _PORTFOLIO_CACHE["ts"] < _PORTFOLIO_TTL_S):
+        return _PORTFOLIO_CACHE["data"]
+
+    rows: list = []
+    failed = inventory_missing = 0
+    for _, r in pending.iterrows():
+        if pd.isna(r.get("seats_available")) or pd.isna(r.get("total_capacity")):
+            inventory_missing += 1
+        try:
+            res = _score(r["request_id"], light=True)
+        except Exception as exc:  # one bad request must not break the dashboard
+            log.warning("overview summary: could not score %s: %s", r["request_id"], exc)
+            failed += 1
+            continue
+        if "error" in res:
+            failed += 1
+            continue
+        def _num(v):
+            return None if pd.isna(v) else float(v)
+
+        dep, created = r.get("departure_dt"), r.get("created_on")
+        inv_known = bool(pd.notna(r.get("seats_available")) and pd.notna(r.get("total_capacity")))
+        item = {
+            "request_id":          r["request_id"],
+            "agent_code":          None if pd.isna(r.get("agent_code")) else str(r.get("agent_code")),
+            "ond":                 None if pd.isna(r.get("ond")) else str(r.get("ond")),
+            "flight_number":       None if pd.isna(r.get("flight_number")) else str(r.get("flight_number")),
+            "departure_dt":        pd.Timestamp(dep).to_pydatetime() if pd.notna(dep) else None,
+            "created_on":          pd.Timestamp(created).to_pydatetime() if pd.notna(created) else None,
+            "status":              r.get("status"),
+            "requested_seats":     int(r["group_size"]) if pd.notna(r.get("group_size")) else 0,
+            "ref_fare":            res["ref_fare"],
+            "recommendation":      res["recommendation"],
+            "expected_contribution": float(res["expected_contribution"]),
+            "p_convert":           float(res["p_convert_at_best"]),
+            "best_fare":           res["best_fare"],
+            "best_seats":          int(res["best_seats"]),
+            "best_deadline_days":  int(res["best_deadline_days"]),
+            "displacement_cost":   float(res["displacement_cost"]),
+            "inventory_known":     inv_known,
+            "seats_available":     _num(r.get("seats_available")) if inv_known else None,
+            "release_days":        int(_load_policy_yaml().get("release_deadline_days", 3)),
+        }
+        rows.append({**res["strategy_comparison"], "item": item})
+
+    data = {
+        "open_requests":     int(len(pending)),
+        "seats_requested":   int(pending["group_size"].fillna(0).sum()),
+        "decided_excluded":  int(open_df["request_id"].isin(decided).sum()),
+        "departed_excluded": departed_excluded,
+        "failed":            failed,
+        "inventory_missing": inventory_missing,
+        "rows":              rows,
+        "generated_at":      datetime.utcnow().isoformat() + "Z",
+    }
+    _PORTFOLIO_CACHE.update({"key": key, "ts": now, "data": data})
+    return data
+
+
+@app.get("/summary/executive")
+def executive_summary(refresh: bool = False):
+    """
+    Overview KPIs across requests awaiting a commercial decision.
+
+    AI and baseline contribution are evaluated on identical assumptions (see
+    engines/comparison.py). A request the AI would reject contributes AED 0 (it is not pursued);
+    a request the baseline rejects also contributes AED 0.
+    These are model estimates of expected contribution, not realised revenue.
+    """
+    p = _portfolio(refresh)
+    rows = p["rows"]
+    have = len(rows) > 0
+    ai_total = sum(r["ai"]["expected_contribution"] for r in rows)
+    base_total = sum(r["baseline"]["expected_contribution"] for r in rows)
+    incremental = ai_total - base_total
+    return {
+        "open_requests":              p["open_requests"],
+        "seats_requested":            p["seats_requested"],
+        "scored_requests":            len(rows),
+        "unscored_requests":          p["failed"],
+        "ai_contribution":            round(ai_total) if have else None,
+        "baseline_contribution":      round(base_total) if have else None,
+        "incremental_contribution":   round(incremental) if have else None,
+        "improvement_pct":            round(incremental / base_total * 100, 1) if have and base_total > 0 else None,
+        "ai_rejected_requests":       sum(1 for r in rows if r["ai"]["decision"] == "Reject"),
+        "inventory_missing_requests": p["inventory_missing"],
+        "decided_excluded":           p["decided_excluded"],
+        "departed_excluded":          p["departed_excluded"],
+        "generated_at":               p["generated_at"],
+    }
+
+
+@app.get("/summary/strategy-comparison")
+def strategy_comparison(refresh: bool = False):
+    """
+    AI optimizer vs the existing rule-based baseline over the same portfolio of pending requests.
+    Both are scored with the same conversion curve, displacement/holding cost, no-show rate and seat
+    caps, so the difference reflects decisions (fare, seats, deadline, accept/reject), not assumptions.
+    """
+    from collections import Counter
+    import yaml
+
+    p = _portfolio(refresh)
+    rows = p["rows"]
+    n = len(rows)
+
+    policy_path = Path(__file__).parent.parent / "config" / "policy.yaml"
+    policy = yaml.safe_load(open(policy_path)) if policy_path.exists() else {}
+
+    def _mean(vals):
+        vals = [v for v in vals if v is not None]
+        return round(sum(vals) / len(vals), 1) if vals else None
+
+    ai_total = sum(r["ai"]["expected_contribution"] for r in rows)
+    base_total = sum(r["baseline"]["expected_contribution"] for r in rows)
+    incremental = ai_total - base_total
+    ai_pursued = [r for r in rows if r["ai"]["decision"] != "Reject"]
+    base_pursued = [r for r in rows if r["baseline"]["decision"] != "Reject"]
+
+    def _decisions(key, labels):
+        c = Counter(r[key]["decision"] for r in rows)
+        return {label: c.get(label, 0) for label in labels}
+
+    effects = {k: round(sum(r["effects"][k] for r in rows)) for k in ("fare", "seats", "deadline", "opportunity")}
+
+    return {
+        "evaluated_requests":         n,
+        "unscored_requests":          p["failed"],
+        "open_requests":              p["open_requests"],
+        "decided_excluded":           p["decided_excluded"],
+        "departed_excluded":          p["departed_excluded"],
+        "inventory_missing_requests": p["inventory_missing"],
+        "ai": {
+            "expected_contribution":   round(ai_total),
+            "contribution_per_request": round(ai_total / n) if n else None,
+            "avg_fare_pct_of_normal":  _mean([r["ai"]["fare_pct"] for r in ai_pursued]),
+            "seats_offered":           int(sum(r["ai"]["seats"] for r in rows)),
+            "seats_above_requested":   int(sum(max(0, r["ai"]["seats"] - r["requested_seats"]) for r in rows)),
+            "requests_above_requested": sum(1 for r in rows if r["ai"]["seats"] > r["requested_seats"]),
+            "at_fare_ceiling":         sum(1 for r in ai_pursued if (r["ai"]["fare_pct"] or 0) >= policy.get("fare_ceiling_pct", 1.2) * 100 - 0.5),
+            "displacement_cost":       round(sum(r["ai"]["displacement_cost"] for r in rows)),
+            "decisions":               _decisions("ai", ["Accept", "Counteroffer", "Partial", "Reject"]),
+        },
+        "baseline": {
+            "expected_contribution":   round(base_total),
+            "contribution_per_request": round(base_total / n) if n else None,
+            "avg_fare_pct_of_normal":  _mean([r["baseline"]["fare_pct"] for r in base_pursued]),
+            "seats_offered":           int(sum(r["baseline"]["seats"] for r in rows)),
+            "displacement_cost":       round(sum(r["baseline"]["displacement_cost"] for r in rows)),
+            "decisions":               _decisions("baseline", ["Accept", "Partial", "Reject"]),
+            "load_factor_rejections":  sum(1 for r in rows if r["baseline"]["decision"] == "Reject"),
+            "load_factor_unknown_requests": sum(1 for r in rows if not r["baseline"]["load_factor_known"]),
+            "load_factor_threshold_pct": round(policy.get("baseline_max_load_factor", 0.75) * 100),
+            "fare_rule":               "historical accepted fare ratio per route",
+        },
+        "requested_seats_total":      int(sum(r["requested_seats"] for r in rows)),
+        "incremental_contribution":   round(incremental) if n else None,
+        "improvement_pct":            round(incremental / base_total * 100, 1) if n and base_total > 0 else None,
+        "requests_ai_higher":         sum(1 for r in rows if r["incremental"] > 0.5),
+        "requests_ai_lower":          sum(1 for r in rows if r["incremental"] < -0.5),
+        "effects":                    effects,
+        "assumptions": {
+            "attrition_pct":          round((1 - policy.get("attrition", 0.9)) * 100),
+            "fare_floor_pct":         round(policy.get("fare_floor_pct", 0.7) * 100),
+            "fare_ceiling_pct":       round(policy.get("fare_ceiling_pct", 1.2) * 100),
+            "deadline_options_days":  policy.get("option_deadlines_days", [7, 14, 21]),
+            "baseline_deadline_days": (policy.get("option_deadlines_days") or [7, 14, 21])[1 if len(policy.get("option_deadlines_days") or [7, 14, 21]) > 1 else 0],
+        },
+        "generated_at":               p["generated_at"],
+    }
+
+
+def _load_policy_yaml() -> dict:
+    import yaml
+    p = Path(__file__).parent.parent / "config" / "policy.yaml"
+    return yaml.safe_load(open(p)) if p.exists() else {}
+
+
+@app.get("/summary/opportunities")
+def revenue_opportunities(refresh: bool = False):
+    """
+    Pending group requests ranked for attention. Every commercial figure (action, expected
+    contribution, fare, seats, deadline window, displacement cost) is the optimizer's own output
+    from the cached portfolio; engines.opportunities only adds categories, urgency and an ordering
+    score that never alters the AI recommendation.
+    """
+    from engines import opportunities as opp
+
+    p = _portfolio(refresh)
+    now = datetime.now()
+    ranked = opp.build_opportunities([r["item"] for r in p["rows"]], now)
+
+    def _iso(v):
+        return v.isoformat() if v is not None and hasattr(v, "isoformat") else v
+
+    out = []
+    for e in ranked:
+        ref = e["ref_fare"] or 0
+        out.append({
+            "request_id":                  e["request_id"],
+            "agent_code":                  e["agent_code"],
+            "ond":                         e["ond"],
+            "flight_number":               e["flight_number"],
+            "departure_dt":                _iso(e["departure_dt"]),
+            "created_on":                  _iso(e["created_on"]),
+            "status":                      e["status"],
+            "requested_seats":             e["requested_seats"],
+            "recommendation":              e["recommendation"],
+            "p_convert":                   e["p_convert"],
+            "expected_contribution":       round(e["expected_contribution"]),
+            "recommended_fare":            e["best_fare"],
+            "recommended_fare_pct":        round(e["best_fare"] / ref * 100, 1) if ref > 0 else None,
+            "recommended_seats":           e["best_seats"],
+            "recommended_deadline_days":   e["best_deadline_days"],
+            "effective_deadline_date":     e["effective_deadline_date"],
+            "deadline_truncated":          e["deadline_truncated"],
+            "latest_confirmation_date":    e["latest_confirmation_date"],
+            "days_to_departure":           e["days_to_departure"],
+            "days_to_latest_confirmation": e["days_to_latest_confirmation"],
+            "age_days":                    e["age_days"],
+            "urgency":                     e["urgency"],
+            "inventory_status":            e["inventory_status"],
+            "inventory_risk":              e["inventory_risk"],
+            "inventory_reasons":           e["inventory_reasons"],
+            "displacement_cost":           round(e["displacement_cost"]),
+            "categories":                  e["categories"],
+            "priority_score":              e["priority_score"],
+            "priority_rank":               e["priority_rank"],
+        })
+    return {
+        "opportunities":     out,
+        "evaluated":         len(out),
+        "unscored":          p["failed"],
+        "open_requests":     p["open_requests"],
+        "decided_excluded":  p["decided_excluded"],
+        "departed_excluded": p["departed_excluded"],
+        "inventory_unknown": sum(1 for o in out if o["inventory_status"] == "unknown"),
+        "thresholds": {
+            "critical_days":       opp.CRITICAL_DAYS,
+            "soon_days":           opp.SOON_DAYS,
+            "high_value_quantile": opp.HIGH_VALUE_QUANTILE,
+            "weights": {
+                "contribution": opp.W_CONTRIBUTION, "conversion": opp.W_CONVERSION,
+                "urgency": opp.W_URGENCY, "inventory": opp.W_INVENTORY,
+            },
+        },
+        "generated_at":      p["generated_at"],
+    }
+
+
+@app.post("/chat")
+def chat(body: ChatRequest):
+    """Agentic chat endpoint: runs Claude with tool use."""
+    from agent.counteroffer import run_agent
+    text, updated_history = run_agent(body.message, body.history)
+    return {"response": text, "history": updated_history}
+
+
+@app.post("/admin/rebuild")
+def rebuild_db():
+    """Rebuild database and feature cache (admin use)."""
+    from etl.build_snapshots import build_database
+    from etl.features import build_features
+    build_database(reload=True)
+    build_features(use_cache=False)
+    from models.train_conversion import train
+    train()
+    return {"status": "rebuild complete"}
+
+
+# ── Web UI (static Next.js export) ────────────────────────────────────────────
+# Must be mounted LAST so the API routes above take precedence.
+# Build with:  cd frontend && npm ci && npm run build   (produces frontend/out)
+FRONTEND_DIR = Path(os.getenv("FRONTEND_DIR", Path(__file__).parent.parent / "frontend" / "out"))
+if FRONTEND_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
