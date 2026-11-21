@@ -17,7 +17,7 @@ const pageList = (cur: number, total: number): (number | '…')[] => {
   const sorted = [...set].sort((a, b) => a - b)
   return sorted.flatMap((n, i) => (i && n - sorted[i - 1] > 1 ? ['…' as const, n] : [n]))
 }
-const REC_COLORS: Record<string, string> = { Accept: '#00b26e', Counteroffer: '#d9892b', Partial: '#ff0041', Reject: '#ff0041' }
+const REC_COLORS: Record<string, string> = { Accept: '#00b26e', Counteroffer: '#2f6fd0', Partial: '#e39c1f', Reject: '#ff0041' }
 const REC_LABELS: Record<string, string> = { Accept: 'Accept request', Counteroffer: 'Counteroffer', Partial: 'Partial allocation', Reject: 'Reject request' }
 
 const errMsg = (e: unknown) => (e instanceof ApiError ? e.message : 'Something went wrong')
@@ -57,6 +57,7 @@ export function GroupBookingDashboard() {
   const [scoreMap, setScoreMap] = useState<Record<string, number>>({})
   const [greeting, setGreeting] = useState('Welcome')
   const searchRef = useRef<HTMLInputElement>(null)
+  const autoPromptRef = useRef('')   // internal prompt sent automatically; never shown to the user
   const [decision, setDecision] = useState<'approve' | 'edit' | 'reject' | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
@@ -197,6 +198,7 @@ let alive = true
     const lf = detail?.load_factor != null ? `${Math.round(detail.load_factor * 100)}%` : 'unknown'
     const topDrivers = (score.drivers ?? []).slice(0, 3).map((d) => `${featureLabel(d.feature)}: ${d.shap_value > 0 ? '+' : ''}${d.shap_value.toFixed(3)}`).join('; ')
     const prompt = `[Request ID: ${selectedId}] Group booking: ${selected?.ond ?? ''} · ${pax} pax · ${aed(score.best_fare)}/pax · ${score.best_seats} seats. AI recommends: ${score.recommendation}. P(convert) = ${pct(score.p_convert_at_best)}, expected contribution = ${aed(score.expected_contribution)}, displacement cost = ${aed(score.displacement_cost)}, load factor = ${lf}${dow ? `, travel day = ${dow}` : ''}. Top SHAP drivers: ${topDrivers}. As a revenue management analyst, give a 2–3 sentence plain-English explanation of why the AI made this recommendation, referencing the specific numbers above. Mention any notable booking pattern or risk factor (e.g. load, day of week, agent history, fare ratio).`
+    autoPromptRef.current = prompt
     setChatBusy(true)
     api.chat(prompt, null).then((r) => { setChatHistory(r.history); setChatBusy(false) }).catch(() => setChatBusy(false))
   }, [score, selectedId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -280,7 +282,7 @@ let alive = true
   const heatSeats = [...new Set(heat.map((c) => c.seats))].sort((a, b) => b - a)
   const heatMin = Math.min(0, ...heat.map((c) => c.expected_contribution))
   const heatMax = Math.max(1, ...heat.map((c) => c.expected_contribution))
-  const heatColor = (v: number) => v > 0 ? `rgba(31,157,99,${0.15 + 0.75 * (v / heatMax)})` : v < 0 ? `rgba(208,68,62,${0.15 + 0.6 * (Math.abs(v) / (Math.abs(heatMin) || 1))})` : '#f0f2f1'
+  const heatColor = (v: number) => v > 0 ? `rgba(31,157,99,${0.15 + 0.75 * (v / heatMax)})` : v < 0 ? `rgba(208,68,62,${0.15 + 0.6 * (Math.abs(v) / (Math.abs(heatMin) || 1))})` : '#f1f1f1'
 
   const left = selected ? daysLeft(selected.departure_dt) : null
   const offerChanged = !!score && (fare !== Math.round(score.best_fare) || seats !== score.best_seats)
@@ -503,7 +505,7 @@ let alive = true
                   <span className="request-meta">{r.flight_number} · {r.group_size} pax · {aed(r.quoted_fare_per_pax)}/pax</span>
                 </span>
                 <span className="request-side">
-                  <span className={`status ${r.status.toLowerCase()}`}>{r.status}</span>
+                  <StatusBadge status={r.status}/>
                   <span className="request-date"><Clock3 size={12}/>{daysLeft(r.departure_dt) ?? '—'}d left</span>
                   {p != null && <span className={`prob-badge ${pConvertClass(p)}`}>{pct(p)}</span>}
                 </span>
@@ -528,7 +530,7 @@ let alive = true
               <div className="panel-title">{route(selected.ond)} <span className="request-id" style={{marginLeft:8}}>{selected.request_id}</span></div>
               <div className="panel-caption">{selected.flight_number} · Departs {fmtDate(selected.departure_dt)}{left != null ? ` · ${left}d left` : ''}</div>
             </div>
-            <span className={`status ${selected.status.toLowerCase()}`}>{selected.status}</span>
+            <StatusBadge status={selected.status}/>
           </div>
           <div className="detail-table-grid">
             <table className="detail-table">
@@ -553,13 +555,13 @@ let alive = true
                 <tr><td>Competitor fare</td><td>{detail?.competitor_fare ? aed(detail.competitor_fare) : '—'}</td></tr>
                 <tr><td>Load factor</td><td>{detail?.load_factor != null ? `${Math.round(detail.load_factor * 100)}%` : scoring ? '…' : '—'}</td></tr>
                 <tr><td>Seats available</td><td>{detail?.seats_available ?? (scoring ? '…' : '—')}</td></tr>
-                <tr><td>Agent</td><td>{detail?.agent_code ?? '—'}{detail?.agent_email ? <span style={{color:'#8a9199',marginLeft:6,fontWeight:400}}>{detail.agent_email}</span> : ''}</td></tr>
-                <tr><td>Agent conv. rate</td><td>{detail ? pct(detail.agent_conv_rate) : '—'}<span style={{color:'#8a9199',marginLeft:6,fontWeight:400,fontSize:'.72rem'}}>({detail?.agent_prior_requests ?? '—'} prior requests)</span></td></tr>
-                <tr><td>Route conv. rate</td><td>{detail ? pct(detail.route_conv_rate) : '—'}<span style={{color:'#8a9199',marginLeft:6,fontWeight:400,fontSize:'.72rem'}}>({detail?.route_prior_requests ?? '—'} on this route)</span></td></tr>
+                <tr><td>Agent</td><td>{detail?.agent_code ?? '—'}{detail?.agent_email ? <span style={{color:'#6b777c',marginLeft:6,fontWeight:400}}>{detail.agent_email}</span> : ''}</td></tr>
+                <tr><td>Agent conv. rate</td><td>{detail ? pct(detail.agent_conv_rate) : '—'}<span style={{color:'#6b777c',marginLeft:6,fontWeight:400,fontSize:12}}>({detail?.agent_prior_requests ?? '—'} prior requests)</span></td></tr>
+                <tr><td>Route conv. rate</td><td>{detail ? pct(detail.route_conv_rate) : '—'}<span style={{color:'#6b777c',marginLeft:6,fontWeight:400,fontSize:12}}>({detail?.route_prior_requests ?? '—'} on this route)</span></td></tr>
               </tbody>
             </table>
           </div>
-          {detail?.load_factor != null && <><div style={{marginTop:10,marginBottom:3,fontSize:'.72rem',color:'#8a9199',fontWeight:600,textTransform:'uppercase',letterSpacing:'.05em'}}>Flight load</div><div className="capacity-bar"><span style={{ width: `${Math.round(detail.load_factor * 100)}%` }}/></div></>}
+          {detail?.load_factor != null && <><div style={{marginTop:10,marginBottom:3,fontSize:12,color:'#6b777c',fontWeight:600,textTransform:'uppercase',letterSpacing:'.05em'}}>Flight load</div><div className="capacity-bar"><span style={{ width: `${Math.round(detail.load_factor * 100)}%` }}/></div></>}
         </section>}
 
         {/* AI recommendation — full width below detail card */}
@@ -602,11 +604,11 @@ let alive = true
             <div className="chart-wrap">
               <div className="chart-top"><span>Fare response curve</span><span className="chart-legend"><i style={{background:'#ff0041'}}/> P(convert)</span></div>
               <div className="fare-line-legend">
-                <span><i className="fare-swatch" style={{background:'#b0b8bd'}}/> Ref fare {aed(refFare)}</span>
+                <span><i className="fare-swatch" style={{background:'#9aa3a7'}}/> Ref fare {aed(refFare)}</span>
                 <span><i className="fare-swatch" style={{background:'#00b26e'}}/> AI best {aed(score.best_fare)}</span>
-                <span><i className="fare-swatch" style={{background:'#e39c4e',borderStyle:'dashed'}}/> Selected {aed(fare)}</span>
+                <span><i className="fare-swatch" style={{background:'#e39c1f',borderStyle:'dashed'}}/> Selected {aed(fare)}</span>
               </div>
-              <div className="curve-chart"><div className="y-labels">{yTicks.map((t) => <span key={t}>{t}</span>)}</div><div className="chart-plot"><div className="grid-line one"/><div className="grid-line two"/><div className="grid-line three"/><svg viewBox="0 0 500 160" preserveAspectRatio="none" role="img" aria-label="Conversion probability versus fare"><defs><linearGradient id="fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#ff0041" stopOpacity=".2"/><stop offset="100%" stopColor="#ff0041" stopOpacity="0"/></linearGradient></defs>{linePath && <><path d={`${linePath} L500,160 L0,160Z`} fill="url(#fill)"/><path d={linePath} fill="none" stroke="#ff0041" strokeWidth="2.5" vectorEffect="non-scaling-stroke"/></>}<line x1={`${xPct(refFare)}%`} y1="0" x2={`${xPct(refFare)}%`} y2="100%" stroke="#b0b8bd" strokeWidth="1.5" vectorEffect="non-scaling-stroke"/><line x1={`${xPct(score.best_fare)}%`} y1="0" x2={`${xPct(score.best_fare)}%`} y2="100%" stroke="#00b26e" strokeWidth="2" vectorEffect="non-scaling-stroke"/><line x1={`${xPct(fare)}%`} y1="0" x2={`${xPct(fare)}%`} y2="100%" stroke="#e39c4e" strokeWidth="1.5" strokeDasharray="4 3" vectorEffect="non-scaling-stroke"/></svg><div className="x-labels"><span>{Math.round(fareMin)} AED</span><span style={{color:'#00b26e',fontWeight:700}}>best {Math.round(score.best_fare)}</span><span>{Math.round(fareMax)} AED</span></div></div></div>
+              <div className="curve-chart"><div className="y-labels">{yTicks.map((t) => <span key={t}>{t}</span>)}</div><div className="chart-plot"><div className="grid-line one"/><div className="grid-line two"/><div className="grid-line three"/><svg viewBox="0 0 500 160" preserveAspectRatio="none" role="img" aria-label="Conversion probability versus fare"><defs><linearGradient id="fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#ff0041" stopOpacity=".2"/><stop offset="100%" stopColor="#ff0041" stopOpacity="0"/></linearGradient></defs>{linePath && <><path d={`${linePath} L500,160 L0,160Z`} fill="url(#fill)"/><path d={linePath} fill="none" stroke="#ff0041" strokeWidth="2.5" vectorEffect="non-scaling-stroke"/></>}<line x1={`${xPct(refFare)}%`} y1="0" x2={`${xPct(refFare)}%`} y2="100%" stroke="#9aa3a7" strokeWidth="1.5" vectorEffect="non-scaling-stroke"/><line x1={`${xPct(score.best_fare)}%`} y1="0" x2={`${xPct(score.best_fare)}%`} y2="100%" stroke="#00b26e" strokeWidth="2" vectorEffect="non-scaling-stroke"/><line x1={`${xPct(fare)}%`} y1="0" x2={`${xPct(fare)}%`} y2="100%" stroke="#e39c1f" strokeWidth="1.5" strokeDasharray="4 3" vectorEffect="non-scaling-stroke"/></svg><div className="x-labels"><span>{Math.round(fareMin)} AED</span><span style={{color:'#0a7a4b',fontWeight:700}}>best {Math.round(score.best_fare)}</span><span>{Math.round(fareMax)} AED</span></div></div></div>
             </div>
             </> : <div className="empty-state">{scoring ? 'Waiting for score…' : 'Select a request'}</div>}
           </section>
@@ -669,7 +671,7 @@ let alive = true
                   <span className="request-meta">{r.group_size} pax · Created {fmtTs(r.created_on)}</span>
                 </span>
                 <span className="request-side">
-                  <span className={`status ${r.status.toLowerCase()}`}>{r.status}</span>
+                  <StatusBadge status={r.status}/>
                   {r.converted != null && <span className="request-date">{r.converted ? '✓ Converted' : '✗ Not converted'}</span>}
                 </span>
               </button>
@@ -684,7 +686,7 @@ let alive = true
           <div className="panel-head">
             <div><div className="panel-title">Request details <span className="request-id" style={{marginLeft:8}}>{selectedAllId}</span></div><div className="panel-caption">{allDetail ? `${route(allDetail.ond)} · ${allDetail.agent_code}` : '—'}</div></div>
             <div style={{display:'flex',gap:8,alignItems:'center'}}>
-              {allDetail && <span className={`status ${allDetail.status.toLowerCase()}`}>{allDetail.status}</span>}
+              {allDetail && <StatusBadge status={allDetail.status}/>}
               <button type="button" className="subtle-button" onClick={() => setSelectedAllId(null)}><X size={13}/></button>
             </div>
           </div>
@@ -745,6 +747,7 @@ let alive = true
             {chatHistory.map((msg, i) => {
               const text = extractText(msg.content)
               if (!text) return null
+              if (msg.role === 'user' && text === autoPromptRef.current) return null
               return (
                 <div key={i} className={`chat-msg chat-msg-${msg.role}`}>
                   {msg.role === 'assistant' && <div className="chat-avatar-sm"><Sparkles size={10}/></div>}
@@ -808,10 +811,10 @@ let alive = true
 
 function FareCompareChart({ quotedFare, aiBestFare, refFare, competitorFare }: { quotedFare: number; aiBestFare: number; refFare: number; competitorFare: number }) {
   const bars = [
-    { label: 'Agent quoted', value: quotedFare, color: '#e39c4e' },
+    { label: 'Agent quoted', value: quotedFare, color: '#e39c1f' },
     { label: 'AI proposal', value: aiBestFare, color: '#00b26e' },
-    { label: 'Reference fare', value: refFare, color: '#6b8fa0' },
-    { label: 'Competitor', value: competitorFare, color: '#ff4466' },
+    { label: 'Reference fare', value: refFare, color: '#2f6fd0' },
+    { label: 'Competitor', value: competitorFare, color: '#ffb3c4' },
   ].filter((b) => b.value > 0)
 
   if (bars.length < 2) return null
@@ -839,15 +842,15 @@ function FareCompareChart({ quotedFare, aiBestFare, refFare, competitorFare }: {
         {ticks.map((f) => {
           const yy = y(maxV * f)
           return <g key={f}>
-            <line x1={PAD.l} y1={yy} x2={W - PAD.r} y2={yy} stroke="#f0f0f0" strokeWidth="1"/>
-            <text x={PAD.l - 5} y={yy + 3} textAnchor="end" fontSize="7" fill="#c5c5c5">{Math.round(maxV * f / 100) * 100}</text>
+            <line x1={PAD.l} y1={yy} x2={W - PAD.r} y2={yy} stroke="#f1f1f1" strokeWidth="1"/>
+            <text x={PAD.l - 5} y={yy + 3} textAnchor="end" fontSize="10" fill="#c5c5c5">{Math.round(maxV * f / 100) * 100}</text>
           </g>
         })}
         {/* x-axis baseline */}
         <line x1={PAD.l} y1={H - PAD.b} x2={W - PAD.r} y2={H - PAD.b} stroke="#e7e7e7" strokeWidth="1"/>
         {/* ref fare horizontal line */}
         {refFare > 0 && (
-          <line x1={PAD.l} y1={y(refFare)} x2={W - PAD.r} y2={y(refFare)} stroke="#6b8fa0" strokeWidth="1" strokeDasharray="4 3" opacity="0.6"/>
+          <line x1={PAD.l} y1={y(refFare)} x2={W - PAD.r} y2={y(refFare)} stroke="#2f6fd0" strokeWidth="1" strokeDasharray="4 3" opacity="0.6"/>
         )}
         {/* bars */}
         {bars.map((b, i) => {
@@ -857,8 +860,8 @@ function FareCompareChart({ quotedFare, aiBestFare, refFare, competitorFare }: {
           return (
             <g key={b.label}>
               <rect x={cx - barW / 2} y={barY} width={barW} height={barH} rx="4" fill={b.color} opacity="0.85"/>
-              <text x={cx} y={barY - 4} textAnchor="middle" fontSize="8" fontWeight="700" fill={b.color}>{Math.round(b.value).toLocaleString()}</text>
-              <text x={cx} y={H - PAD.b + 13} textAnchor="middle" fontSize="7.5" fill="#6b777c">{b.label}</text>
+              <text x={cx} y={barY - 4} textAnchor="middle" fontSize="10" fontWeight="700" fill={b.color}>{Math.round(b.value).toLocaleString()}</text>
+              <text x={cx} y={H - PAD.b + 13} textAnchor="middle" fontSize="10" fill="#6b777c">{b.label}</text>
             </g>
           )
         })}
@@ -887,7 +890,7 @@ function HeatRow({ seats, fares, heat, color, bestFare, bestSeats, refFare }: { 
       const isBest = c && Math.round(f) === Math.round(bestFare) && seats === bestSeats
       const val = c ? c.expected_contribution : null
       const disp = val == null ? '' : val < 0 ? '—' : val < 100 ? '~0' : val >= 1000 ? `${(val / 1000).toFixed(1)}k` : String(Math.round(val))
-      const textColor = val == null ? '' : val < 0 ? '#cc3300' : val < 100 ? '#9baab0' : '#1a4a2e'
+      const textColor = val == null ? '' : val < 0 ? '#8a5200' : val < 100 ? '#9aa3a7' : '#0a7a4b'
       return <span key={f} className={`heat-cell${isBest ? ' heat-best' : ''}`}
         title={c ? `${seats} seats at AED ${Math.round(f).toLocaleString()}/pax (${Math.round(f/refFare*100)}% of ref) → expected contribution AED ${Math.round(c.expected_contribution).toLocaleString()}` : ''}
         style={{ background: c ? color(c.expected_contribution) : '#f7f7f7', color: textColor }}>
@@ -975,7 +978,7 @@ function OpportunityRow({ o, onOpen }: { o: Opportunity; onOpen: (id: string) =>
   const flags: { text: string; tone: string }[] = []
   if (o.categories.includes('high_value')) flags.push({ text: 'High value', tone: 'green' })
   if (o.categories.includes('deadline_approaching') && o.days_to_latest_confirmation != null) flags.push({ text: `Cut-off ${inDays(o.days_to_latest_confirmation)}`, tone: o.urgency === 'critical' ? 'red' : 'amber' })
-  if (o.categories.includes('inventory_review')) flags.push({ text: o.inventory_status === 'unknown' ? 'Inventory unknown' : 'Inventory risk', tone: 'amber' })
+  if (o.categories.includes('inventory_review') && o.inventory_status !== 'unknown') flags.push({ text: 'Inventory risk', tone: 'amber' })
   return <button type="button" className="opp-row" onClick={() => onOpen(o.request_id)} aria-label={`Open request ${o.request_id}`}>
     <span className="opp-rank" title={`Priority ${o.priority_rank}`}>{o.priority_rank}</span>
     <span className="opp-main"><b>{o.request_id}</b><span>{o.ond ? route(o.ond) : '—'}{o.flight_number ? ` · ${o.flight_number}` : ''}</span><small>{o.agent_code ?? 'Agent n/a'} · {o.requested_seats} pax · departs {fmtShort(o.departure_dt)}</small></span>
@@ -1078,4 +1081,9 @@ function StrategyComparisonPanel({ data, state, error, onRetry }: { data: Strate
       </p>
     </div>
   </section>
+}
+
+const statusSlug = (st: string) => st.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+function StatusBadge({ status }: { status: string }) {
+  return <span className={`status ${statusSlug(status)}`}><i className="status-dot" aria-hidden="true"/>{status}</span>
 }
