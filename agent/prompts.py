@@ -41,28 +41,31 @@ Expected contribution vs rule-based baseline: **AED {lift:+,}**.
 """
 
 COUNTEROFFER_TEMPLATE = """
-Dear {agent_name},
+Dear Travel Partner,
 
-Thank you for your group booking inquiry with Air Arabia.
+Thank you for your group booking inquiry with Air Arabia. We have reviewed your request and are pleased to present the following offer:
 
-We are pleased to provide the following offer for your group:
+    Route:                  {ond}
+    Flight:                 {flight_number}
+    Travel Date:            {departure_date}
+    Group Size:             {seats} passengers
+    Fare (per passenger):   AED {fare:,.0f}
+    Option Expiry:          {deadline_date}
 
-**Route:** {ond}
-**Flight:** {flight_number}
-**Travel Date:** {departure_date}
-**Passengers:** {seats} pax
-**Fare per passenger:** AED {fare:,.0f}
-**Confirmation deadline:** {deadline_date}
+Terms & Conditions:
+  1. This offer is valid for acceptance until {option_deadline}.
+  2. Full passenger name list is required no later than {release_days} days prior to departure.
+  3. Full payment is due upon booking confirmation.
+  4. This fare is subject to availability and may be revised if group size changes.
 
-Please note:
-- This offer is valid for confirmation by {option_deadline}.
-- Final passenger names are required at least {release_days} days before departure.
-- Full payment is due upon confirmation.
+To confirm this offer, please reply to this email or contact your dedicated Air Arabia Group Desk representative.
 
-We look forward to your response.
+We look forward to welcoming your group on board.
 
-Best regards,
+Warm regards,
+
 Air Arabia Group Desk
+groupbookings@airarabia.com
 """
 
 

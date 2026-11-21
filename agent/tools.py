@@ -270,10 +270,10 @@ def draft_counteroffer(request_id: str, fare: float, seats: int, deadline_days: 
         dep_date  = "TBD"
         option_dl = "TBD"
 
+    ond_display = req.get("ond", "").replace("/", " – ")
     filled = COUNTEROFFER_TEMPLATE.format(
-        agent_name   = req.get("agent_code", "Agent"),
-        ond          = req.get("ond", ""),
-        flight_number= req.get("flight_number", ""),
+        ond          = ond_display,
+        flight_number= req.get("flight_number", "TBD"),
         departure_date=dep_date,
         seats        = seats,
         fare         = fare,
@@ -288,8 +288,18 @@ def draft_counteroffer(request_id: str, fare: float, seats: int, deadline_days: 
         client = anthropic.Anthropic(api_key=api_key)
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=800,
-            system="You are an airline group booking agent. Polish the following draft email to be professional and concise. Do not change any numbers.",
+            max_tokens=900,
+            system=(
+                "You are a senior airline group booking coordinator at Air Arabia. "
+                "Rewrite the draft email below as a polished, professional plain-text email. "
+                "Rules:\n"
+                "- Keep plain text — no Markdown, no asterisks, no bullet dashes, no bold.\n"
+                "- Preserve every number, date, flight number, and route exactly as given.\n"
+                "- Use clear paragraph breaks and an indented table-style block for the offer details.\n"
+                "- Salutation must remain 'Dear Travel Partner,'.\n"
+                "- Signature must end with 'Air Arabia Group Desk' on its own line.\n"
+                "- Tone: courteous, formal, concise. No marketing language."
+            ),
             messages=[{"role": "user", "content": filled}],
         )
         polished = resp.content[0].text
