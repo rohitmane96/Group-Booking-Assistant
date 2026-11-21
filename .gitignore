@@ -2,9 +2,7 @@
 __pycache__/
 *.pyc
 *.pyo
-data/cache/
-data/*.duckdb
+data/
 models/artifacts/
-*.zip
 .DS_Store
 .idea/
