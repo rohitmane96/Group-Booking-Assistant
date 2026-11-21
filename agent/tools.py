@@ -34,15 +34,20 @@ def _load_artifacts():
         _model, _calibrator, _explainer, _feat_names = load_model()
 
 
-def _load_features() -> pd.DataFrame:
+_DATA_DIR  = Path(__file__).parent.parent / "data" / "cache"
+_LIVE_PATH = _DATA_DIR / "live_requests.parquet"
+
+
+def _load_features(force_reload: bool = False) -> pd.DataFrame:
+    """Load historical features, merging in any live submitted requests."""
     global _feature_df
-    if _feature_df is None:
-        cache = Path(__file__).parent.parent / "data" / "cache" / "features.parquet"
-        if cache.exists():
-            _feature_df = pd.read_parquet(cache)
-        else:
-            from etl.features import build_features
-            _feature_df = build_features()
+    if _feature_df is None or force_reload or _LIVE_PATH.exists():
+        cache = _DATA_DIR / "features.parquet"
+        df = pd.read_parquet(cache) if cache.exists() else __import__("etl.features", fromlist=["build_features"]).build_features()
+        if _LIVE_PATH.exists():
+            live = pd.read_parquet(_LIVE_PATH)
+            df = pd.concat([df, live], ignore_index=True)
+        _feature_df = df
     return _feature_df
 
 

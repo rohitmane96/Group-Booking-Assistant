@@ -4,12 +4,14 @@ WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/ .
+# Empty string = same-origin relative URLs (React served by FastAPI at /)
+ARG NEXT_PUBLIC_API_BASE_URL=
+ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 RUN npm run build
 
 # -- Stage 2: backend
 FROM python:3.11-slim
 
-# system deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
@@ -17,21 +19,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# copy source
 COPY . .
 
-# built UI (served by FastAPI at /)
+# embed React static export (served by FastAPI at /)
 COPY --from=frontend /frontend/out ./frontend/out
 
-# create data/cache and artifacts dirs
 RUN mkdir -p data/cache models/artifacts
 
-# default: start API server
-# override CMD in docker-compose for UI service
-EXPOSE 8000 8501
+EXPOSE 8888
 
-CMD ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8888"]
