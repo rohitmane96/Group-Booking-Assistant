@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   # ── ETL + Model training (one-time init job) ──────────────────────────────
   init:
@@ -9,7 +7,8 @@ services:
       bash -c "
         python -m etl.build_snapshots &&
         python -m etl.features &&
-        python -m models.train_conversion
+        python -m models.train_conversion &&
+        echo 'Init complete'
       "
     volumes:
       - ./data:/app/data

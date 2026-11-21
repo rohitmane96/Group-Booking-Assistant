@@ -253,6 +253,8 @@ def get_X_y(feat: pd.DataFrame, exclude_live: bool = True):
 
 
 if __name__ == "__main__":
+    import sys
     logging.basicConfig(level=logging.INFO)
-    feat = build_features(use_cache=False)
+    force = "--rebuild" in sys.argv
+    feat = build_features(use_cache=not force)
     print(feat.head())

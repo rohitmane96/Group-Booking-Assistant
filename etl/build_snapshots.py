@@ -275,4 +275,6 @@ def get_connection() -> duckdb.DuckDBPyConnection:
 
 
 if __name__ == "__main__":
-    build_database(reload=True)
+    import sys
+    reload = "--reload" in sys.argv
+    build_database(reload=reload)
