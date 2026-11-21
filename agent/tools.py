@@ -248,8 +248,8 @@ def get_drivers(request_id: str, feat_dict: dict | None = None) -> list[dict]:
 # ── Tool: draft_counteroffer ──────────────────────────────────────────────────
 
 def draft_counteroffer(request_id: str, fare: float, seats: int, deadline_days: int) -> dict:
-    """Draft a counteroffer email using the LLM (Claude)."""
-    import anthropic, os
+    """Draft a counteroffer email from the standard template."""
+    import os
     from agent.prompts import COUNTEROFFER_TEMPLATE
     import datetime
 
@@ -282,29 +282,7 @@ def draft_counteroffer(request_id: str, fare: float, seats: int, deadline_days: 
         release_days = 3,
     )
 
-    # Optionally polish via Claude
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    if api_key:
-        client = anthropic.Anthropic(api_key=api_key)
-        resp = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=900,
-            system=(
-                "You are a senior airline group booking coordinator at Air Arabia. "
-                "Rewrite the draft email below as a polished, professional plain-text email. "
-                "Rules:\n"
-                "- Keep plain text — no Markdown, no asterisks, no bullet dashes, no bold.\n"
-                "- Preserve every number, date, flight number, and route exactly as given.\n"
-                "- Use clear paragraph breaks and an indented table-style block for the offer details.\n"
-                "- Salutation must remain 'Dear Travel Partner,'.\n"
-                "- Signature must end with 'Air Arabia Group Desk' on its own line.\n"
-                "- Tone: courteous, formal, concise. No marketing language."
-            ),
-            messages=[{"role": "user", "content": filled}],
-        )
-        polished = resp.content[0].text
-    else:
-        polished = filled
+    polished = filled
 
     return {
         "request_id":    request_id,
