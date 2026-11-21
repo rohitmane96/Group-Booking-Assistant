@@ -448,6 +448,10 @@ def rebuild_db():
     return {"status": "rebuild complete"}
 
 
+_PORTFOLIO_CACHE: dict = {"key": None, "ts": 0.0, "data": None}
+_PORTFOLIO_TTL_S = 120  # 2-minute TTL
+
+
 def _decided_request_ids() -> set:
     """Requests that already have a recorded human decision (approve / edit / reject)."""
     ids: set = set()
