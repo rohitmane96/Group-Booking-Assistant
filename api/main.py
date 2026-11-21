@@ -91,6 +91,7 @@ class SubmitRequest(BaseModel):
     departure_date: str                # YYYY-MM-DD
     airline_quoted_fare: float
     agent_code: Optional[str] = None
+    agent_email: Optional[str] = None
     flight_number: Optional[str] = None
     competitor_fare: Optional[float] = None
 
@@ -189,6 +190,7 @@ def _compute_live_features(req: SubmitRequest) -> dict:
         "ond":                  req.ond,
         "trip_type":            req.trip_type,
         "agent_code":           req.agent_code,
+        "agent_email":          req.agent_email,
         "num_options":          1.0,
         "quoted_fare_per_pax":  float(req.airline_quoted_fare),
         "ref_fare":             ref_fare,

@@ -66,6 +66,7 @@ export function GroupBookingDashboard() {
   const [emailSending, setEmailSending] = useState(false)
   const [emailSent, setEmailSent] = useState(false)
   const noticeTimer = useRef<number | undefined>(undefined)
+  const draftRef = useRef<HTMLElement | null>(null)
 
   function flash(msg: string) {
     setNotice(msg)
@@ -95,7 +96,7 @@ export function GroupBookingDashboard() {
     let alive = true
     setDetail(null); setScore(null); setScenario(null); setScoreError(''); setScoring(true)
     setDecision(null); setAnswer(''); setCounterofferDraft(''); setChatHistory(null)
-    setRecipientEmail(''); setEmailSent(false)
+    setEmailSent(false)
     api.getRequest(selectedId).then((d) => alive && setDetail(d)).catch(() => {})
     api.score(selectedId).then((s) => {
       if (!alive) return
@@ -105,6 +106,18 @@ export function GroupBookingDashboard() {
     }).catch((e) => alive && setScoreError(errMsg(e))).finally(() => alive && setScoring(false))
     return () => { alive = false }
   }, [selectedId, retryTick])
+
+  // pre-fill recipient email from agent_email when detail loads
+  useEffect(() => {
+    if (detail?.agent_email) setRecipientEmail(detail.agent_email)
+  }, [detail])
+
+  // scroll counteroffer card into view when it appears
+  useEffect(() => {
+    if (counterofferDraft && draftRef.current) {
+      draftRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  }, [counterofferDraft])
 
   // what-if scenario (debounced)
   useEffect(() => {
@@ -285,7 +298,7 @@ export function GroupBookingDashboard() {
         <footer className="footer"><span>AI recommendations support decisions — all offers require human approval.</span></footer>
       </div>
     </section>
-    <aside className="agent-panel"><div className="agent-head"><div className="agent-icon"><Bot size={18}/></div><div><b>Booking assistant</b><span><i className="live-dot"/> Ready to help</span></div><button className="more-button" aria-label="More assistant options">···</button></div><div className="agent-body"><div className="agent-intro"><div className="agent-spark"><Sparkles size={15}/></div><b>Your decision copilot</b><p>Ask me to explain a recommendation or explore a what-if scenario.</p></div><div className="chat-context"><span>ACTIVE REQUEST</span><b>{selected ? `${selected.request_id} · ${route(selected.ond)}` : '—'}</b><span>{pax} passengers · {fmtDate(selected?.departure_dt ?? null)}</span></div><div className="suggestions-label">TRY ASKING</div><button className="suggestion" disabled={chatBusy} onClick={() => ask('Why this recommendation?')}>Why this recommendation?</button><button className="suggestion" disabled={chatBusy} onClick={() => ask('What if we raise the fare by 5%?')}>What if we raise the fare?</button><button className="suggestion" onClick={draftCounteroffer}>Draft a counteroffer</button>{answer && <div className="agent-answer"><div><Sparkles size={13}/> ASSISTANT</div><article className="md" aria-live="polite"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></article></div>}{counterofferDraft && <section className="counteroffer-card" aria-label="Counteroffer draft"><div className="counteroffer-card-head"><div><b>Counteroffer email</b><span>{emailSent ? 'SENT' : 'DRAFT · NOT SENT'}</span></div><FileText size={15}/></div><label className="sr-only" htmlFor="counteroffer-draft">Editable counteroffer message</label><textarea id="counteroffer-draft" value={counterofferDraft} onChange={(event) => { setCounterofferDraft(event.target.value); setEmailSent(false) }}/><div className="counteroffer-actions"><button type="button" className="copy-draft-button" onClick={copyCounteroffer}><Copy size={13}/> Copy</button><div className="send-email-row"><input className="email-input" type="email" placeholder="Recipient email…" value={recipientEmail} onChange={(e) => { setRecipientEmail(e.target.value); setEmailSent(false) }} aria-label="Recipient email address"/><button type="button" className={`send-email-button ${emailSent ? 'is-sent' : ''}`} onClick={sendEmail} disabled={emailSending || !recipientEmail || emailSent}>{emailSent ? <><Check size={13}/> Sent</> : emailSending ? 'Sending…' : <><Send size={13}/> Send</>}</button></div></div><p className="counteroffer-note">Review and edit the draft before sending. All sends are logged to the audit trail.</p></section>}</div><form className="chat-compose" onSubmit={(e) => { e.preventDefault(); const m = chat; setChat(''); ask(m) }}><input aria-label="Ask the booking assistant" value={chat} onChange={(e) => setChat(e.target.value)} placeholder="Ask about this request…"/><button aria-label="Send message" type="submit" disabled={chatBusy}><Send size={15}/></button></form><div className="agent-disclaimer">AI responses are based on model scenarios, not live PSS updates.</div></aside>
+    <aside className="agent-panel"><div className="agent-head"><div className="agent-icon"><Bot size={18}/></div><div><b>Booking assistant</b><span><i className="live-dot"/> Ready to help</span></div><button className="more-button" aria-label="More assistant options">···</button></div><div className="agent-body"><div className="agent-intro"><div className="agent-spark"><Sparkles size={15}/></div><b>Your decision copilot</b><p>Ask me to explain a recommendation or explore a what-if scenario.</p></div><div className="chat-context"><span>ACTIVE REQUEST</span><b>{selected ? `${selected.request_id} · ${route(selected.ond)}` : '—'}</b><span>{pax} passengers · {fmtDate(selected?.departure_dt ?? null)}</span></div><div className="suggestions-label">TRY ASKING</div><button className="suggestion" disabled={chatBusy} onClick={() => ask('Why this recommendation?')}>Why this recommendation?</button><button className="suggestion" disabled={chatBusy} onClick={() => ask('What if we raise the fare by 5%?')}>What if we raise the fare?</button><button className="suggestion" onClick={draftCounteroffer}>Draft a counteroffer</button>{answer && <div className="agent-answer"><div><Sparkles size={13}/> ASSISTANT</div><article className="md" aria-live="polite"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></article></div>}{counterofferDraft && <section ref={draftRef} className="counteroffer-card" aria-label="Counteroffer draft"><div className="counteroffer-card-head"><div><b>Counteroffer email</b><span>{emailSent ? 'SENT' : 'DRAFT · NOT SENT'}</span></div><FileText size={15}/></div><label className="sr-only" htmlFor="counteroffer-draft">Editable counteroffer message</label><textarea id="counteroffer-draft" value={counterofferDraft} onChange={(event) => { setCounterofferDraft(event.target.value); setEmailSent(false) }}/><div className="counteroffer-actions"><button type="button" className="copy-draft-button" onClick={copyCounteroffer}><Copy size={13}/> Copy</button><div className="send-email-row"><input className="email-input" type="email" placeholder="Recipient email…" value={recipientEmail} onChange={(e) => { setRecipientEmail(e.target.value); setEmailSent(false) }} aria-label="Recipient email address"/><button type="button" className={`send-email-button ${emailSent ? 'is-sent' : ''}`} onClick={sendEmail} disabled={emailSending || !recipientEmail || emailSent}>{emailSent ? <><Check size={13}/> Sent</> : emailSending ? 'Sending…' : <><Send size={13}/> Send</>}</button></div></div>{detail?.agent_email && <p className="counteroffer-note agent-email-note"><Check size={10}/> Recipient pre-filled from agent profile ({detail.agent_email})</p>}<p className="counteroffer-note">Review and edit before sending. All sends are logged to the audit trail.</p></section>}</div><form className="chat-compose" onSubmit={(e) => { e.preventDefault(); const m = chat; setChat(''); ask(m) }}><input aria-label="Ask the booking assistant" value={chat} onChange={(e) => setChat(e.target.value)} placeholder="Ask about this request…"/><button aria-label="Send message" type="submit" disabled={chatBusy}><Send size={15}/></button></form><div className="agent-disclaimer">AI responses are based on model scenarios, not live PSS updates.</div></aside>
     {notice && <div className="toast" role="status"><Check size={15}/>{notice}</div>}
   </main>
 }

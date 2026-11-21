@@ -27,6 +27,7 @@ export interface RequestDetail {
   ond: string
   trip_type: string
   agent_code: string
+  agent_email: string | null
   num_options: number
   quoted_fare_per_pax: number | null
   ref_fare: number | null
