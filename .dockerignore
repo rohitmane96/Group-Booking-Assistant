@@ -1,0 +1,11 @@
+.git
+.env
+__pycache__
+*.pyc
+*.pyo
+data/cache/
+models/artifacts/
+*.zip
+*.csv
+*.parquet
+.DS_Store

@@ -1,0 +1,34 @@
+# Commercial Policy for Group Booking Optimizer
+# Edit these values to adjust the business rules
+
+# Fare constraints
+fare_floor_pct: 0.70          # minimum fare as % of reference individual fare
+fare_ceiling_pct: 1.20        # maximum fare to quote (120% of reference)
+fare_grid_steps: 11           # number of fare levels to evaluate (~5% steps)
+
+# Seat constraints
+max_group_share_of_capacity: 0.40   # max % of flight capacity a group can take
+min_group_size: 10                   # minimum pax to qualify as a group booking
+max_seats_per_group: 80             # hard cap on seats per request
+
+# Attrition (expected no-show rate)
+attrition: 0.90    # fraction of booked pax who actually travel (0.9 = 10% attrition)
+
+# Deadline options (days before departure)
+option_deadlines_days: [7, 14, 21]   # option confirmation deadlines to evaluate
+release_deadline_days: 3             # days before departure for final release
+
+# Displacement cost
+holding_cost_per_seat_per_day: 0.0  # AED cost of blocking a seat (can be non-zero)
+
+# Baseline rule parameters
+baseline_fare_pct_of_reference: 0.90  # baseline quotes at 90% of reference fare
+baseline_max_load_factor: 0.75        # baseline accepts if LF below this threshold
+
+# Decision thresholds
+min_expected_contribution: 0        # reject if optimizer objective is negative
+min_pconvert_to_accept: 0.05        # minimum conversion probability to offer
+
+# Elasticity assumption (for fare-response simulation)
+# When quoted_fare / reference_fare varies, assumed P(convert) elasticity
+fare_elasticity_assumption: -1.5    # % change in P(convert) per % change in fare ratio
