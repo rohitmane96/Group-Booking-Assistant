@@ -2,9 +2,18 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowUpRight, Bot, Check, ChevronDown, CircleHelp, Clock3, Copy, FileText, Filter, Plane, Search, Send, ShieldCheck, Sparkles, X } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { api, ApiError, type ApprovalRequest, type AuditEntry, type ChatMessage, type RequestDetail, type RequestSummary, type ScenarioResponse, type ScoreResponse } from '@/lib/api'
 
 const DEADLINES = [7, 14, 21]
+const PAGE_SIZES = [5, 8, 10, 20]
+const pageList = (cur: number, total: number): (number | '…')[] => {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
+  const set = new Set([1, total, cur - 1, cur, cur + 1].filter((n) => n >= 1 && n <= total))
+  const sorted = [...set].sort((a, b) => a - b)
+  return sorted.flatMap((n, i) => (i && n - sorted[i - 1] > 1 ? ['…' as const, n] : [n]))
+}
 const REC_COLORS: Record<string, string> = { Accept: '#00b26e', Counteroffer: '#d9892b', Partial: '#ff0041', Reject: '#ff0041' }
 const REC_LABELS: Record<string, string> = { Accept: 'Accept request', Counteroffer: 'Counteroffer', Partial: 'Partial allocation', Reject: 'Reject request' }
 
@@ -37,6 +46,12 @@ export function GroupBookingDashboard() {
   const [deadline, setDeadline] = useState(7)
   const [heatDeadline, setHeatDeadline] = useState(7)
   const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState<string[]>([])
+  const [filterOpen, setFilterOpen] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(8)
+  const [greeting, setGreeting] = useState('Welcome')
+  const searchRef = useRef<HTMLInputElement>(null)
   const [decision, setDecision] = useState<'approve' | 'edit' | 'reject' | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
@@ -57,6 +72,7 @@ export function GroupBookingDashboard() {
 
   // initial load: queue (polled every 60s) + audit log
   useEffect(() => {
+    const hr = new Date().getHours(); setGreeting(hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening')
     setToday(new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).toUpperCase())
     let alive = true
     const load = () => api.listRequests().then((r) => {
@@ -98,12 +114,28 @@ export function GroupBookingDashboard() {
     return () => { alive = false; window.clearTimeout(t) }
   }, [selectedId, score, fare, seats, deadline])
 
+  // reset to first page whenever the result set changes
+  useEffect(() => { setPage(1) }, [query, statusFilter, pageSize])
+  // ⌘K / Ctrl+K focuses search
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); searchRef.current?.focus() } }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   const selected = requests.find((r) => r.request_id === selectedId) ?? null
   const pax = detail?.group_size ?? selected?.group_size ?? 0
   const probability = scenario?.p_convert ?? score?.p_convert_at_best ?? null
   const contribution = scenario?.expected_contribution ?? score?.expected_contribution ?? null
   const refFare = score?.ref_fare ?? detail?.ref_fare ?? selected?.ref_fare ?? 0
-  const filtered = useMemo(() => requests.filter((r) => `${r.ond} ${r.request_id} ${r.group_request_id} ${r.flight_number}`.toLowerCase().includes(query.toLowerCase())), [requests, query])
+  const statusCounts = useMemo(() => requests.reduce<Record<string, number>>((acc, r) => { acc[r.status] = (acc[r.status] ?? 0) + 1; return acc }, {}), [requests])
+  const statuses = useMemo(() => Object.keys(statusCounts).sort(), [statusCounts])
+  const filtered = useMemo(() => requests.filter((r) => (statusFilter.length === 0 || statusFilter.includes(r.status)) && `${r.ond} ${r.request_id} ${r.group_request_id} ${r.flight_number}`.toLowerCase().includes(query.toLowerCase())), [requests, query, statusFilter])
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize)
+  const toggleStatus = (st: string) => setStatusFilter((cur) => cur.includes(st) ? cur.filter((x) => x !== st) : [...cur, st])
+  const clearFilters = () => { setStatusFilter([]); setQuery('') }
 
   const curve = score?.fare_curve ?? []
   const fareMin = curve.length ? curve[0].fare : Math.round(refFare * 0.7)
@@ -183,7 +215,7 @@ export function GroupBookingDashboard() {
       <header className="topbar"><div className="breadcrumb">Revenue management <span>/</span> <b>Overview</b></div><div className="top-actions"><span className="date-pill"><span className="live-dot"/> Live inventory</span><button className="icon-button" aria-label="Help"><CircleHelp size={18}/></button><div className="avatar">JS</div></div></header>
       <div className="page-content">
         {listState === 'error' && <div className="empty-state" role="alert">Cannot connect to server — {listError}. Check that the API is running and NEXT_PUBLIC_API_BASE_URL is correct.</div>}
-        <div className="heading-row"><div><div className="eyebrow">{today}</div><h1>Good morning, Jordan <span className="wave">✳</span></h1><p className="subheading">Here’s your group booking performance at a glance.</p></div></div>
+        <div className="heading-row"><div><div className="eyebrow">{today}</div><h1>{greeting}, Jordan <span className="wave">✳</span></h1><p className="subheading">Here’s your group booking performance at a glance.</p></div></div>
         <div className="metrics-grid">
           <Metric label="Open requests" value={listState === 'loading' ? '…' : String(total)} change="Quoted or submitted" icon={<FileText size={17}/>} tone="teal"/>
           <Metric label="Selected P(convert)" value={scoring ? '…' : pct(probability)} change={selectedId ? `at ${aed(fare)} · ${seats} seats` : 'Select a request'} icon={<Activity size={17}/>} tone="blue"/>
@@ -191,9 +223,11 @@ export function GroupBookingDashboard() {
           <Metric label="Remaining demand" value={scoring ? '…' : score ? `${Math.round(score.remaining_demand)} pax` : '—'} change="Est. individual demand" icon={<Plane size={17}/>} tone="rose"/>
         </div>
         <div className="content-grid">
-          <section className="panel queue-panel" id="requests"><div className="panel-head"><div><div className="panel-title">Requests to review <span className="count-badge">{total}</span></div><div className="panel-caption">Open group requests</div></div><button className="subtle-button"><Filter size={14}/> Filter</button></div>
-            <label className="search-box"><Search size={15}/><input aria-label="Search requests" placeholder="Search requests…" value={query} onChange={(e) => setQuery(e.target.value)}/><kbd>⌘ K</kbd></label>
-            <div className="request-list">{filtered.map((r) => <button key={r.request_id} className={`request-row ${selectedId === r.request_id ? 'selected' : ''}`} onClick={() => setSelectedId(r.request_id)}><span className="request-avatar">{initials(r.ond)}</span><span className="request-main"><span className="request-route">{route(r.ond)}<span className="request-id">{r.request_id}</span></span><span className="request-meta">{r.flight_number} · {r.group_size} passengers</span></span><span className="request-side"><span className={`status ${r.status.toLowerCase()}`}>{r.status}</span><span className="request-date"><Clock3 size={12}/>{daysLeft(r.departure_dt) ?? '—'}d left</span></span></button>)}{listState === 'loading' && <div className="empty-state">Loading requests…</div>}{listState === 'ready' && filtered.length === 0 && <div className="empty-state">No matching requests</div>}</div>
+          <section className="panel queue-panel" id="requests"><div className="panel-head"><div><div className="panel-title">Requests to review <span className="count-badge">{filtered.length === requests.length ? total : `${filtered.length} of ${requests.length}`}</span></div><div className="panel-caption">Open group requests</div></div><button type="button" className={`subtle-button filter-toggle ${statusFilter.length ? 'active' : ''}`} aria-expanded={filterOpen} aria-controls="status-filter" onClick={() => setFilterOpen((o) => !o)}><Filter size={14}/> Filter{statusFilter.length > 0 && <span className="filter-badge">{statusFilter.length}</span>}</button></div>
+            {(filterOpen || statusFilter.length > 0) && <div id="status-filter" className="filter-bar" role="group" aria-label="Filter by request status"><span className="filter-label">STATUS</span>{statuses.map((st) => <button type="button" key={st} className={`filter-chip ${statusFilter.includes(st) ? 'on' : ''}`} aria-pressed={statusFilter.includes(st)} onClick={() => toggleStatus(st)}>{st} <i>{statusCounts[st]}</i></button>)}{statusFilter.length > 0 && <button type="button" className="filter-clear" onClick={() => setStatusFilter([])}>Clear</button>}</div>}
+            <label className="search-box"><Search size={15}/><input ref={searchRef} aria-label="Search requests" placeholder="Search requests…" value={query} onChange={(e) => setQuery(e.target.value)}/><kbd>Ctrl K</kbd></label>
+            <div className="request-list">{pageRows.map((r) => <button key={r.request_id} className={`request-row ${selectedId === r.request_id ? 'selected' : ''}`} onClick={() => setSelectedId(r.request_id)}><span className="request-avatar">{initials(r.ond)}</span><span className="request-main"><span className="request-route">{route(r.ond)}<span className="request-id">{r.request_id}</span></span><span className="request-meta">{r.flight_number} · {r.group_size} passengers</span></span><span className="request-side"><span className={`status ${r.status.toLowerCase()}`}>{r.status}</span><span className="request-date"><Clock3 size={12}/>{daysLeft(r.departure_dt) ?? '—'}d left</span></span></button>)}{listState === 'loading' && Array.from({ length: 5 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true"/>)}{listState === 'ready' && filtered.length === 0 && <div className="empty-state">No requests match{statusFilter.length ? ` ${statusFilter.join(' / ')}` : ''}{query ? ` “${query}”` : ''}. <button type="button" className="filter-clear" onClick={clearFilters}>Clear filters</button></div>}</div>
+            {filtered.length > 0 && <nav className="pagination" aria-label="Requests pagination"><span className="page-info">{(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filtered.length)} of {filtered.length}</span><div className="page-controls"><button type="button" className="page-btn" aria-label="Previous page" disabled={safePage === 1} onClick={() => setPage(safePage - 1)}>‹</button>{pageList(safePage, totalPages).map((n, i) => n === '…' ? <span key={`e${i}`} className="page-gap">…</span> : <button type="button" key={n} className={`page-btn ${n === safePage ? 'current' : ''}`} aria-current={n === safePage ? 'page' : undefined} aria-label={`Page ${n}`} onClick={() => setPage(n)}>{n}</button>)}<button type="button" className="page-btn" aria-label="Next page" disabled={safePage === totalPages} onClick={() => setPage(safePage + 1)}>›</button></div><label className="page-size">Rows<select aria-label="Rows per page" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>{PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}</select></label></nav>}
           </section>
           <section className="panel recommendation-panel"><div className="panel-head"><div><div className="panel-title">AI recommendation <span className="ai-tag"><Sparkles size={11}/> ASSIST</span></div><div className="panel-caption">{selected ? `${selected.request_id} · ${route(selected.ond)} · ${fmtDate(selected.departure_dt)}` : 'No request selected'}</div></div><button className="more-button" aria-label="More options">···</button></div>
             {scoring && <div className="empty-state">Scoring request — this can take a few seconds…</div>}
@@ -236,7 +270,7 @@ export function GroupBookingDashboard() {
         <footer className="footer"><span>AI recommendations support decisions — all offers require human approval.</span></footer>
       </div>
     </section>
-    <aside className="agent-panel"><div className="agent-head"><div className="agent-icon"><Bot size={18}/></div><div><b>Booking assistant</b><span><i className="live-dot"/> Ready to help</span></div><button className="more-button" aria-label="More assistant options">···</button></div><div className="agent-body"><div className="agent-intro"><div className="agent-spark"><Sparkles size={15}/></div><b>Your decision copilot</b><p>Ask me to explain a recommendation or explore a what-if scenario.</p></div><div className="chat-context"><span>ACTIVE REQUEST</span><b>{selected ? `${selected.request_id} · ${route(selected.ond)}` : '—'}</b><span>{pax} passengers · {fmtDate(selected?.departure_dt ?? null)}</span></div><div className="suggestions-label">TRY ASKING</div><button className="suggestion" disabled={chatBusy} onClick={() => ask('Why this recommendation?')}>Why this recommendation?</button><button className="suggestion" disabled={chatBusy} onClick={() => ask('What if we raise the fare by 5%?')}>What if we raise the fare?</button><button className="suggestion" onClick={draftCounteroffer}>Draft a counteroffer</button>{answer && <div className="agent-answer"><div><Sparkles size={13}/> ASSISTANT</div>{answer}</div>}{counterofferDraft && <section className="counteroffer-card" aria-label="Counteroffer draft"><div className="counteroffer-card-head"><div><b>Counteroffer email</b><span>DRAFT · NOT SENT</span></div><FileText size={15}/></div><label className="sr-only" htmlFor="counteroffer-draft">Editable counteroffer message</label><textarea id="counteroffer-draft" value={counterofferDraft} onChange={(event) => setCounterofferDraft(event.target.value)}/><button type="button" className="copy-draft-button" onClick={copyCounteroffer}><Copy size={13}/> Copy draft</button><p>Review and approve before sending. No message is sent from this workspace.</p></section>}</div><form className="chat-compose" onSubmit={(e) => { e.preventDefault(); const m = chat; setChat(''); ask(m) }}><input aria-label="Ask the booking assistant" value={chat} onChange={(e) => setChat(e.target.value)} placeholder="Ask about this request…"/><button aria-label="Send message" type="submit" disabled={chatBusy}><Send size={15}/></button></form><div className="agent-disclaimer">AI responses are based on model scenarios, not live PSS updates.</div></aside>
+    <aside className="agent-panel"><div className="agent-head"><div className="agent-icon"><Bot size={18}/></div><div><b>Booking assistant</b><span><i className="live-dot"/> Ready to help</span></div><button className="more-button" aria-label="More assistant options">···</button></div><div className="agent-body"><div className="agent-intro"><div className="agent-spark"><Sparkles size={15}/></div><b>Your decision copilot</b><p>Ask me to explain a recommendation or explore a what-if scenario.</p></div><div className="chat-context"><span>ACTIVE REQUEST</span><b>{selected ? `${selected.request_id} · ${route(selected.ond)}` : '—'}</b><span>{pax} passengers · {fmtDate(selected?.departure_dt ?? null)}</span></div><div className="suggestions-label">TRY ASKING</div><button className="suggestion" disabled={chatBusy} onClick={() => ask('Why this recommendation?')}>Why this recommendation?</button><button className="suggestion" disabled={chatBusy} onClick={() => ask('What if we raise the fare by 5%?')}>What if we raise the fare?</button><button className="suggestion" onClick={draftCounteroffer}>Draft a counteroffer</button>{answer && <div className="agent-answer"><div><Sparkles size={13}/> ASSISTANT</div><article className="md" aria-live="polite"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></article></div>}{counterofferDraft && <section className="counteroffer-card" aria-label="Counteroffer draft"><div className="counteroffer-card-head"><div><b>Counteroffer email</b><span>DRAFT · NOT SENT</span></div><FileText size={15}/></div><label className="sr-only" htmlFor="counteroffer-draft">Editable counteroffer message</label><textarea id="counteroffer-draft" value={counterofferDraft} onChange={(event) => setCounterofferDraft(event.target.value)}/><button type="button" className="copy-draft-button" onClick={copyCounteroffer}><Copy size={13}/> Copy draft</button><p>Review and approve before sending. No message is sent from this workspace.</p></section>}</div><form className="chat-compose" onSubmit={(e) => { e.preventDefault(); const m = chat; setChat(''); ask(m) }}><input aria-label="Ask the booking assistant" value={chat} onChange={(e) => setChat(e.target.value)} placeholder="Ask about this request…"/><button aria-label="Send message" type="submit" disabled={chatBusy}><Send size={15}/></button></form><div className="agent-disclaimer">AI responses are based on model scenarios, not live PSS updates.</div></aside>
     {notice && <div className="toast" role="status"><Check size={15}/>{notice}</div>}
   </main>
 }
