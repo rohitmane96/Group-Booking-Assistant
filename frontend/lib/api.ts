@@ -81,6 +81,8 @@ export interface ScenarioResponse {
 export interface CounterOfferResponse { request_id: string; counteroffer_email: string; fare: number; seats: number; deadline_days: number }
 
 export interface ApprovalRequest { action: 'approve' | 'edit' | 'reject'; fare?: number; seats?: number; note?: string }
+export interface SendCounterOfferRequest { to_email: string; subject: string; body: string }
+export interface SendCounterOfferResponse { status: 'sent'; to: string }
 export interface AuditEntry { timestamp: string; request_id: string; action: 'approve' | 'edit' | 'reject'; fare: number | null; seats: number | null; note: string | null; source: string }
 export interface ChatMessage { role: 'user' | 'assistant'; content: string | object[] }
 export interface ChatResponse { response: string; history: ChatMessage[] }
@@ -117,6 +119,7 @@ export const api = {
   score: (id: string) => post<ScoreResponse>(`/requests/${enc(id)}/score`),
   scenario: (id: string, p: OfferParams) => post<ScenarioResponse>(`/requests/${enc(id)}/scenario`, p),
   counteroffer: (id: string, p: OfferParams) => post<CounterOfferResponse>(`/requests/${enc(id)}/counteroffer`, p),
+  sendCounteroffer: (id: string, b: SendCounterOfferRequest) => post<SendCounterOfferResponse>(`/requests/${enc(id)}/send-counteroffer`, b),
   approve: (id: string, b: ApprovalRequest) => post<{ status: 'recorded'; entry: AuditEntry }>(`/requests/${enc(id)}/approve`, b),
   audit: () => call<{ entries: AuditEntry[] }>('/audit'),
   chat: (message: string, history: ChatMessage[] | null) => post<ChatResponse>('/chat', { message, history }),

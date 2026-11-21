@@ -78,6 +78,12 @@ class CounterOfferRequest(BaseModel):
     deadline_days: int
 
 
+class SendCounterOfferRequest(BaseModel):
+    to_email: str
+    subject: str
+    body: str
+
+
 class SubmitRequest(BaseModel):
     ond: str
     group_size: int
@@ -342,6 +348,51 @@ def draft_counteroffer(request_id: str, body: CounterOfferRequest):
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
     return result
+
+
+@app.post("/requests/{request_id}/send-counteroffer")
+def send_counteroffer(request_id: str, body: SendCounterOfferRequest):
+    """Send a counteroffer email via SMTP. Requires SMTP_* env vars."""
+    import smtplib
+    import ssl
+    from email.mime.text import MIMEText
+
+    host = os.getenv("SMTP_HOST", "")
+    port = int(os.getenv("SMTP_PORT", "587"))
+    user = os.getenv("SMTP_USER", "")
+    password = os.getenv("SMTP_PASSWORD", "")
+    from_addr = os.getenv("SMTP_FROM", user)
+
+    if not host or not user or not password:
+        raise HTTPException(
+            status_code=503,
+            detail="SMTP not configured. Set SMTP_HOST, SMTP_USER and SMTP_PASSWORD in .env",
+        )
+
+    msg = MIMEText(body.body, "plain")
+    msg["Subject"] = body.subject
+    msg["From"] = from_addr
+    msg["To"] = body.to_email
+
+    try:
+        ctx = ssl.create_default_context()
+        with smtplib.SMTP(host, port) as smtp:
+            smtp.ehlo()
+            smtp.starttls(context=ctx)
+            smtp.login(user, password)
+            smtp.sendmail(from_addr, [body.to_email], msg.as_string())
+    except Exception as e:
+        log.error("SMTP send failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"Failed to send email: {e}")
+
+    _write_audit({
+        "timestamp":  datetime.utcnow().isoformat(),
+        "request_id": request_id,
+        "action":     "counteroffer_sent",
+        "note":       f"Counteroffer emailed to {body.to_email}",
+        "source":     "ui_send",
+    })
+    return {"status": "sent", "to": body.to_email}
 
 
 @app.post("/requests/{request_id}/approve")

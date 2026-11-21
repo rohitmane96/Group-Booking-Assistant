@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowUpRight, Bot, Check, ChevronDown, CircleHelp, Clock3, Copy, FileText, Filter, Plane, Search, Send, ShieldCheck, Sparkles, X } from 'lucide-react'
-import { api, ApiError, type ApprovalRequest, type AuditEntry, type ChatMessage, type RequestDetail, type RequestSummary, type ScenarioResponse, type ScoreResponse } from '@/lib/api'
+import { api, ApiError, type ApprovalRequest, type AuditEntry, type ChatMessage, type RequestDetail, type RequestSummary, type ScenarioResponse, type ScoreResponse, type SendCounterOfferRequest } from '@/lib/api'
 
 const DEADLINES = [7, 14, 21]
 const REC_COLORS: Record<string, string> = { Accept: '#00b26e', Counteroffer: '#d9892b', Partial: '#ff0041', Reject: '#ff0041' }
@@ -47,6 +47,9 @@ export function GroupBookingDashboard() {
   const [chatHistory, setChatHistory] = useState<ChatMessage[] | null>(null)
   const [chatBusy, setChatBusy] = useState(false)
   const [counterofferDraft, setCounterofferDraft] = useState('')
+  const [recipientEmail, setRecipientEmail] = useState('')
+  const [emailSending, setEmailSending] = useState(false)
+  const [emailSent, setEmailSent] = useState(false)
   const noticeTimer = useRef<number | undefined>(undefined)
 
   function flash(msg: string) {
@@ -76,6 +79,7 @@ export function GroupBookingDashboard() {
     let alive = true
     setDetail(null); setScore(null); setScenario(null); setScoreError(''); setScoring(true)
     setDecision(null); setAnswer(''); setCounterofferDraft(''); setChatHistory(null)
+    setRecipientEmail(''); setEmailSent(false)
     api.getRequest(selectedId).then((d) => alive && setDetail(d)).catch(() => {})
     api.score(selectedId).then((s) => {
       if (!alive) return
@@ -153,6 +157,17 @@ export function GroupBookingDashboard() {
   async function copyCounteroffer() {
     try { await navigator.clipboard.writeText(counterofferDraft); flash('Counteroffer copied to clipboard') }
     catch { flash('Clipboard unavailable — select and copy the draft text') }
+  }
+
+  async function sendEmail() {
+    if (!selectedId || !recipientEmail || !counterofferDraft || emailSending) return
+    setEmailSending(true)
+    try {
+      const subject = `Group booking counteroffer — ${selected?.ond ?? selectedId}`
+      await api.sendCounteroffer(selectedId, { to_email: recipientEmail, subject, body: counterofferDraft })
+      setEmailSent(true)
+      flash(`Counteroffer sent to ${recipientEmail}`)
+    } catch (e) { flash(errMsg(e)) } finally { setEmailSending(false) }
   }
 
   async function ask(message: string) {
@@ -236,7 +251,7 @@ export function GroupBookingDashboard() {
         <footer className="footer"><span>AI recommendations support decisions — all offers require human approval.</span></footer>
       </div>
     </section>
-    <aside className="agent-panel"><div className="agent-head"><div className="agent-icon"><Bot size={18}/></div><div><b>Booking assistant</b><span><i className="live-dot"/> Ready to help</span></div><button className="more-button" aria-label="More assistant options">···</button></div><div className="agent-body"><div className="agent-intro"><div className="agent-spark"><Sparkles size={15}/></div><b>Your decision copilot</b><p>Ask me to explain a recommendation or explore a what-if scenario.</p></div><div className="chat-context"><span>ACTIVE REQUEST</span><b>{selected ? `${selected.request_id} · ${route(selected.ond)}` : '—'}</b><span>{pax} passengers · {fmtDate(selected?.departure_dt ?? null)}</span></div><div className="suggestions-label">TRY ASKING</div><button className="suggestion" disabled={chatBusy} onClick={() => ask('Why this recommendation?')}>Why this recommendation?</button><button className="suggestion" disabled={chatBusy} onClick={() => ask('What if we raise the fare by 5%?')}>What if we raise the fare?</button><button className="suggestion" onClick={draftCounteroffer}>Draft a counteroffer</button>{answer && <div className="agent-answer"><div><Sparkles size={13}/> ASSISTANT</div>{answer}</div>}{counterofferDraft && <section className="counteroffer-card" aria-label="Counteroffer draft"><div className="counteroffer-card-head"><div><b>Counteroffer email</b><span>DRAFT · NOT SENT</span></div><FileText size={15}/></div><label className="sr-only" htmlFor="counteroffer-draft">Editable counteroffer message</label><textarea id="counteroffer-draft" value={counterofferDraft} onChange={(event) => setCounterofferDraft(event.target.value)}/><button type="button" className="copy-draft-button" onClick={copyCounteroffer}><Copy size={13}/> Copy draft</button><p>Review and approve before sending. No message is sent from this workspace.</p></section>}</div><form className="chat-compose" onSubmit={(e) => { e.preventDefault(); const m = chat; setChat(''); ask(m) }}><input aria-label="Ask the booking assistant" value={chat} onChange={(e) => setChat(e.target.value)} placeholder="Ask about this request…"/><button aria-label="Send message" type="submit" disabled={chatBusy}><Send size={15}/></button></form><div className="agent-disclaimer">AI responses are based on model scenarios, not live PSS updates.</div></aside>
+    <aside className="agent-panel"><div className="agent-head"><div className="agent-icon"><Bot size={18}/></div><div><b>Booking assistant</b><span><i className="live-dot"/> Ready to help</span></div><button className="more-button" aria-label="More assistant options">···</button></div><div className="agent-body"><div className="agent-intro"><div className="agent-spark"><Sparkles size={15}/></div><b>Your decision copilot</b><p>Ask me to explain a recommendation or explore a what-if scenario.</p></div><div className="chat-context"><span>ACTIVE REQUEST</span><b>{selected ? `${selected.request_id} · ${route(selected.ond)}` : '—'}</b><span>{pax} passengers · {fmtDate(selected?.departure_dt ?? null)}</span></div><div className="suggestions-label">TRY ASKING</div><button className="suggestion" disabled={chatBusy} onClick={() => ask('Why this recommendation?')}>Why this recommendation?</button><button className="suggestion" disabled={chatBusy} onClick={() => ask('What if we raise the fare by 5%?')}>What if we raise the fare?</button><button className="suggestion" onClick={draftCounteroffer}>Draft a counteroffer</button>{answer && <div className="agent-answer"><div><Sparkles size={13}/> ASSISTANT</div>{answer}</div>}{counterofferDraft && <section className="counteroffer-card" aria-label="Counteroffer draft"><div className="counteroffer-card-head"><div><b>Counteroffer email</b><span>{emailSent ? 'SENT' : 'DRAFT · NOT SENT'}</span></div><FileText size={15}/></div><label className="sr-only" htmlFor="counteroffer-draft">Editable counteroffer message</label><textarea id="counteroffer-draft" value={counterofferDraft} onChange={(event) => { setCounterofferDraft(event.target.value); setEmailSent(false) }}/><div className="counteroffer-actions"><button type="button" className="copy-draft-button" onClick={copyCounteroffer}><Copy size={13}/> Copy</button><div className="send-email-row"><input className="email-input" type="email" placeholder="Recipient email…" value={recipientEmail} onChange={(e) => { setRecipientEmail(e.target.value); setEmailSent(false) }} aria-label="Recipient email address"/><button type="button" className={`send-email-button ${emailSent ? 'is-sent' : ''}`} onClick={sendEmail} disabled={emailSending || !recipientEmail || emailSent}>{emailSent ? <><Check size={13}/> Sent</> : emailSending ? 'Sending…' : <><Send size={13}/> Send</>}</button></div></div><p className="counteroffer-note">Review and edit the draft before sending. All sends are logged to the audit trail.</p></section>}</div><form className="chat-compose" onSubmit={(e) => { e.preventDefault(); const m = chat; setChat(''); ask(m) }}><input aria-label="Ask the booking assistant" value={chat} onChange={(e) => setChat(e.target.value)} placeholder="Ask about this request…"/><button aria-label="Send message" type="submit" disabled={chatBusy}><Send size={15}/></button></form><div className="agent-disclaimer">AI responses are based on model scenarios, not live PSS updates.</div></aside>
     {notice && <div className="toast" role="status"><Check size={15}/>{notice}</div>}
   </main>
 }
