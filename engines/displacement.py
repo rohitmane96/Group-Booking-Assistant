@@ -76,10 +76,18 @@ def forecast_remaining_demand(
     if sub.empty:
         return 0.20 * capacity
 
-    # seats already booked at lead_time = days_to_departure
-    at_now = sub[sub["days_before_departure"] <= days_to_departure]["cumulative_booked"].max()
-    # seats booked at departure (days=0)
-    at_dep = sub["cumulative_booked"].max()
+    # cumulative_booked is highest at days_before_departure=0 (departure day)
+    # and lowest at the furthest out day — pick the row AT current lead time
+    beyond = sub[sub["days_before_departure"] >= days_to_departure]
+    if beyond.empty:
+        # already past most of the booking window
+        at_now = float(sub.loc[sub["days_before_departure"].idxmin(), "cumulative_booked"])
+    else:
+        idx = (beyond["days_before_departure"] - days_to_departure).abs().idxmin()
+        at_now = float(beyond.loc[idx, "cumulative_booked"])
+
+    # total bookings expected by departure (minimum days_before_departure ≈ 0)
+    at_dep = float(sub.loc[sub["days_before_departure"].idxmin(), "cumulative_booked"])
 
     if pd.isna(at_now) or pd.isna(at_dep):
         return 0.20 * capacity

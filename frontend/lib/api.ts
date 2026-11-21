@@ -15,6 +15,7 @@ export interface RequestSummary {
   departure_dt: string | null
 }
 export interface RequestListResponse { requests: RequestSummary[]; total: number }
+export interface RequestAllSummary { request_id: string; group_request_id: string; created_on: string; status: string; ond: string; group_size: number; converted: number | null }
 
 export interface RequestDetail {
   request_id: string
@@ -116,6 +117,7 @@ const enc = encodeURIComponent
 export const api = {
   health: () => call<{ status: string }>('/health'),
   listRequests: () => call<RequestListResponse>('/requests'),
+  listAllRequests: () => call<{ requests: RequestAllSummary[]; total: number }>('/requests/all'),
   getRequest: (id: string) => call<RequestDetail>(`/requests/${enc(id)}`),
   score: (id: string) => post<ScoreResponse>(`/requests/${enc(id)}/score`),
   scenario: (id: string, p: OfferParams) => post<ScenarioResponse>(`/requests/${enc(id)}/scenario`, p),
