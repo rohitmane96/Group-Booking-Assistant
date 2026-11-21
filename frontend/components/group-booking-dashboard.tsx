@@ -1,15 +1,15 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowUpRight, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy, FileText, History, LayoutDashboard, List, ListFilter, Wallet, TrendingUp, TrendingDown, Armchair, ClipboardList, RefreshCw, AlertCircle, Plane, Search, Send, ShieldCheck, Sparkles, X } from 'lucide-react'
+import { Armchair, AlertCircle, ArrowUpRight, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy, FileText, Filter, History, LayoutDashboard, List, Plane, RefreshCw, Search, Send, ShieldCheck, Sparkles, TrendingDown, TrendingUp, Wallet, ClipboardList, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { api, ApiError, type ApprovalRequest, type AuditEntry, type ChatMessage, type RequestAllSummary, type RequestDetail, type ExecutiveSummary, type StrategyComparison, type Opportunity, type OpportunityCategory, type OpportunityData, type RequestSummary, type ScenarioResponse, type ScoreResponse, type SendCounterOfferRequest } from '@/lib/api'
+import { api, ApiError, type ApprovalRequest, type AuditEntry, type ExecutiveSummary, type Opportunity, type OpportunityCategory, type OpportunityData, type StrategyComparison, type ChatMessage, type RequestAllSummary, type RequestDetail, type RequestSummary, type ScenarioResponse, type ScoreResponse, type SendCounterOfferRequest } from '@/lib/api'
 
 type Page = 'overview' | 'requests' | 'all-requests' | 'audit'
 const PAGE_LABELS: Record<Page, string> = { overview: 'Overview', requests: 'Open Requests', 'all-requests': 'All Requests', audit: 'Decision Log' }
 
-const DEADLINES = [7, 14, 21]
+const DEADLINES = [3, 7, 14]
 const PAGE_SIZES = [5, 8, 10, 20]
 const pageList = (cur: number, total: number): (number | '…')[] => {
   if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
@@ -49,9 +49,8 @@ export function GroupBookingDashboard() {
   const [deadline, setDeadline] = useState(7)
   const [heatDeadline, setHeatDeadline] = useState(7)
   const [query, setQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
-  const [routeFilter, setRouteFilter] = useState('')
-  const [flightFilter, setFlightFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState<string[]>([])
+  const [filterOpen, setFilterOpen] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(8)
   const [queueCollapsed, setQueueCollapsed] = useState(false)
@@ -74,9 +73,7 @@ export function GroupBookingDashboard() {
   const [oppError, setOppError] = useState('')
   const [today, setToday] = useState('')
   const [chat, setChat] = useState('')
-  const [thread, setThread] = useState<{ role: 'user' | 'assistant'; text: string }[]>([])
-  const [typing, setTyping] = useState(false)
-  const bodyRef = useRef<HTMLDivElement>(null)
+  const [answer, setAnswer] = useState('')
   const [chatHistory, setChatHistory] = useState<ChatMessage[] | null>(null)
   const [chatBusy, setChatBusy] = useState(false)
   const [counterofferDraft, setCounterofferDraft] = useState('')
@@ -87,11 +84,21 @@ export function GroupBookingDashboard() {
   const draftRef = useRef<HTMLElement | null>(null)
   const [activePage, setActivePage] = useState<Page>('overview')
   const [panelOpen, setPanelOpen] = useState(true)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(224)
+  const [agentWidth, setAgentWidth] = useState(300)
+  const sidebarDragRef = useRef<{ startX: number; startWidth: number } | null>(null)
+  const agentDragRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const [allRequests, setAllRequests] = useState<RequestAllSummary[]>([])
-  const [allStatus, setAllStatus] = useState('')
+  const [allReqState, setAllReqState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [allQuery, setAllQuery] = useState('')
+  const [allStatusFilter, setAllStatusFilter] = useState<string[]>([])
+  const [allFilterOpen, setAllFilterOpen] = useState(false)
   const [allPage, setAllPage] = useState(1)
   const [allPageSize, setAllPageSize] = useState(10)
-  const [allReqState, setAllReqState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [selectedAllId, setSelectedAllId] = useState<string | null>(null)
+  const [allDetail, setAllDetail] = useState<RequestDetail | null>(null)
+  const [allDetailLoading, setAllDetailLoading] = useState(false)
 
   function flash(msg: string) {
     setNotice(msg)
@@ -101,9 +108,7 @@ export function GroupBookingDashboard() {
 
   // initial load: queue (polled every 60s) + audit log
   useEffect(() => {
-    const hr = new Date().getHours(); setGreeting(hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening')
-    setToday(new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).toUpperCase())
-    let alive = true
+let alive = true
     const load = () => api.listRequests().then((r) => {
       if (!alive) return
       setRequests(r.requests); setTotal(r.total); setListState('ready'); setListError('')
@@ -113,6 +118,12 @@ export function GroupBookingDashboard() {
     api.audit().then((r) => alive && setAudit([...r.entries].reverse())).catch(() => {})
     const poll = window.setInterval(load, 60_000)
     return () => { alive = false; window.clearInterval(poll) }
+  }, [])
+
+  useEffect(() => {
+    const hr = new Date().getHours()
+    setGreeting(hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening')
+    setToday(new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).toUpperCase())
   }, [])
 
   // executive summary: refresh when the open queue changes, after a decision, or on retry
@@ -137,7 +148,7 @@ export function GroupBookingDashboard() {
     if (!selectedId) return
     let alive = true
     setDetail(null); setScore(null); setScenario(null); setScoreError(''); setScoring(true)
-    setDecision(null); setThread([]); setTyping(false); setCounterofferDraft(''); setChatHistory(null)
+    setDecision(null); setAnswer(''); setCounterofferDraft(''); setChatHistory(null)
     setEmailSent(false)
     api.getRequest(selectedId).then((d) => alive && setDetail(d)).catch(() => {})
     api.score(selectedId).then((s) => {
@@ -174,6 +185,22 @@ export function GroupBookingDashboard() {
     return () => { alive = false; window.clearTimeout(t) }
   }, [selectedId, score, fare, seats, deadline])
 
+  // clear chat context when leaving requests page
+  useEffect(() => {
+    if (activePage !== 'requests') { setChatHistory(null); setAnswer('') }
+  }, [activePage])
+
+  // auto-generate "Why this recommendation?" as a chat message when score first loads for a request
+  useEffect(() => {
+    if (!score || !selectedId || chatHistory !== null || chatBusy) return
+    const dow = detail?.dow_travel != null ? (['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][detail.dow_travel] ?? `day ${detail.dow_travel}`) : null
+    const lf = detail?.load_factor != null ? `${Math.round(detail.load_factor * 100)}%` : 'unknown'
+    const topDrivers = (score.drivers ?? []).slice(0, 3).map((d) => `${featureLabel(d.feature)}: ${d.shap_value > 0 ? '+' : ''}${d.shap_value.toFixed(3)}`).join('; ')
+    const prompt = `[Request ID: ${selectedId}] Group booking: ${selected?.ond ?? ''} · ${pax} pax · ${aed(score.best_fare)}/pax · ${score.best_seats} seats. AI recommends: ${score.recommendation}. P(convert) = ${pct(score.p_convert_at_best)}, expected contribution = ${aed(score.expected_contribution)}, displacement cost = ${aed(score.displacement_cost)}, load factor = ${lf}${dow ? `, travel day = ${dow}` : ''}. Top SHAP drivers: ${topDrivers}. As a revenue management analyst, give a 2–3 sentence plain-English explanation of why the AI made this recommendation, referencing the specific numbers above. Mention any notable booking pattern or risk factor (e.g. load, day of week, agent history, fare ratio).`
+    setChatBusy(true)
+    api.chat(prompt, null).then((r) => { setChatHistory(r.history); setChatBusy(false) }).catch(() => setChatBusy(false))
+  }, [score, selectedId]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // load all requests when navigating to that page
   useEffect(() => {
     if (activePage !== 'all-requests' || allReqState !== 'idle') return
@@ -182,8 +209,19 @@ export function GroupBookingDashboard() {
   }, [activePage, allReqState])
 
   // reset to first page whenever the result set changes
-  useEffect(() => { setPage(1) }, [query, statusFilter, routeFilter, flightFilter, pageSize])
-  useEffect(() => { setAllPage(1) }, [allStatus, allPageSize])
+  useEffect(() => { setPage(1) }, [query, statusFilter, pageSize])
+  useEffect(() => { setAllPage(1) }, [allQuery, allStatusFilter, allPageSize])
+
+  // load detail for selected all-requests row
+  useEffect(() => {
+    if (!selectedAllId) return
+    let alive = true
+    setAllDetail(null); setAllDetailLoading(true)
+    api.getRequest(selectedAllId)
+      .then((d) => { if (alive) { setAllDetail(d); setAllDetailLoading(false) } })
+      .catch(() => { if (alive) setAllDetailLoading(false) })
+    return () => { alive = false }
+  }, [selectedAllId])
   // ⌘K / Ctrl+K focuses search
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); searchRef.current?.focus() } }
@@ -196,28 +234,32 @@ export function GroupBookingDashboard() {
   const probability = scenario?.p_convert ?? score?.p_convert_at_best ?? null
   const contribution = scenario?.expected_contribution ?? score?.expected_contribution ?? null
   const refFare = score?.ref_fare ?? detail?.ref_fare ?? selected?.ref_fare ?? 0
-  const allStatusCounts = useMemo(() => allRequests.reduce<Record<string, number>>((acc, r) => { acc[r.status] = (acc[r.status] ?? 0) + 1; return acc }, {}), [allRequests])
-  const allStatuses = useMemo(() => Object.keys(allStatusCounts).sort(), [allStatusCounts])
-  const allFiltered = useMemo(() => allRequests.filter((r) => !allStatus || r.status === allStatus), [allRequests, allStatus])
-  const allTotalPages = Math.max(1, Math.ceil(allFiltered.length / allPageSize))
-  const allSafePage = Math.min(allPage, allTotalPages)
-  const allRows = allFiltered.slice((allSafePage - 1) * allPageSize, allSafePage * allPageSize)
-  const statuses = useMemo(() => [...new Set(requests.map((r) => r.status))].sort(), [requests])
-  const routes = useMemo(() => [...new Set(requests.map((r) => r.ond))].sort(), [requests])
-  const flights = useMemo(() => [...new Set(requests.map((r) => r.flight_number).filter(Boolean))].sort(), [requests])
+  const statusCounts = useMemo(() => requests.reduce<Record<string, number>>((acc, r) => { acc[r.status] = (acc[r.status] ?? 0) + 1; return acc }, {}), [requests])
+  const statuses = useMemo(() => Object.keys(statusCounts).sort(), [statusCounts])
   const filtered = useMemo(() => requests.filter((r) =>
-    (!statusFilter || r.status === statusFilter) &&
-    (!routeFilter || r.ond === routeFilter) &&
-    (!flightFilter || r.flight_number === flightFilter) &&
+    (statusFilter.length === 0 || statusFilter.includes(r.status)) &&
     `${r.ond} ${r.request_id} ${r.group_request_id} ${r.flight_number}`.toLowerCase().includes(query.toLowerCase())
-  ), [requests, query, statusFilter, routeFilter, flightFilter])
+  ), [requests, query, statusFilter])
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const safePage = Math.min(page, totalPages)
   const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize)
-  const hasFilters = !!(statusFilter || routeFilter || flightFilter || query)
-  const clearFilters = () => { setStatusFilter(''); setRouteFilter(''); setFlightFilter(''); setQuery('') }
-  const pConvertClass = (p: number | undefined) => { if (p == null) return ''; if (p >= 0.35) return 'prob-high'; if (p >= 0.12) return 'prob-mid'; return 'prob-low' }
-  const statusCounts = useMemo(() => requests.reduce<Record<string, number>>((acc, r) => { acc[r.status] = (acc[r.status] ?? 0) + 1; return acc }, {}), [requests])
+  const toggleStatus = (st: string) => setStatusFilter((cur) => cur.includes(st) ? cur.filter((x) => x !== st) : [...cur, st])
+  const hasFilters = !!(statusFilter.length || query)
+  const clearFilters = () => { setStatusFilter([]); setQuery('') }
+
+  const allStatusCounts = useMemo(() => allRequests.reduce<Record<string, number>>((acc, r) => { acc[r.status] = (acc[r.status] ?? 0) + 1; return acc }, {}), [allRequests])
+  const allStatuses = useMemo(() => Object.keys(allStatusCounts).sort(), [allStatusCounts])
+  const allFiltered = useMemo(() => allRequests.filter((r) =>
+    (allStatusFilter.length === 0 || allStatusFilter.includes(r.status)) &&
+    `${r.ond} ${r.request_id} ${r.group_request_id}`.toLowerCase().includes(allQuery.toLowerCase())
+  ), [allRequests, allQuery, allStatusFilter])
+  const allTotalPages = Math.max(1, Math.ceil(allFiltered.length / allPageSize))
+  const allSafePage = Math.min(allPage, allTotalPages)
+  const allPageRows = allFiltered.slice((allSafePage - 1) * allPageSize, allSafePage * allPageSize)
+  const toggleAllStatus = (st: string) => setAllStatusFilter((cur) => cur.includes(st) ? cur.filter((x) => x !== st) : [...cur, st])
+  const hasAllFilters = !!(allStatusFilter.length || allQuery)
+  const clearAllFilters = () => { setAllStatusFilter([]); setAllQuery('') }
+  const pConvertClass = (p: number | undefined) => { if (p == null) return ''; if (p >= 0.15) return 'prob-high'; if (p >= 0.04) return 'prob-mid'; return 'prob-low' }
 
   const curve = score?.fare_curve ?? []
   const fareMin = curve.length ? curve[0].fare : Math.round(refFare * 0.7)
@@ -232,11 +274,13 @@ export function GroupBookingDashboard() {
   const maxShap = Math.max(0.0001, ...drivers.map((d) => Math.abs(d.shap_value)))
 
   const heat = (score?.heat_map ?? []).filter((c) => c.deadline === heatDeadline)
-  const heatFares = [...new Set(heat.map((c) => c.fare))].sort((a, b) => a - b)
+  const heatFaresAll = [...new Set(heat.map((c) => c.fare))].sort((a, b) => a - b)
+  // Show every 2nd fare column → 6 clean columns at ~10% intervals (70,80,90,100,110,120%)
+  const heatFares = heatFaresAll.filter((_, i) => i % 2 === 0)
   const heatSeats = [...new Set(heat.map((c) => c.seats))].sort((a, b) => b - a)
   const heatMin = Math.min(0, ...heat.map((c) => c.expected_contribution))
   const heatMax = Math.max(1, ...heat.map((c) => c.expected_contribution))
-  const heatColor = (v: number) => v >= 0 ? `rgba(31,157,99,${0.12 + 0.75 * (v / heatMax)})` : `rgba(208,68,62,${0.15 + 0.7 * (v / (heatMin || -1))})`
+  const heatColor = (v: number) => v > 0 ? `rgba(31,157,99,${0.15 + 0.75 * (v / heatMax)})` : v < 0 ? `rgba(208,68,62,${0.15 + 0.6 * (Math.abs(v) / (Math.abs(heatMin) || 1))})` : '#f0f2f1'
 
   const left = selected ? daysLeft(selected.departure_dt) : null
   const offerChanged = !!score && (fare !== Math.round(score.best_fare) || seats !== score.best_seats)
@@ -257,11 +301,11 @@ export function GroupBookingDashboard() {
   async function draftCounteroffer() {
     if (!selectedId) return
     try {
-      setThread((t) => [...t, { role: 'user', text: 'Draft a counteroffer' }]); setTyping(true)
+      setAnswer('Drafting counteroffer…')
       const r = await api.counteroffer(selectedId, { fare, seats, deadline_days: deadline })
       setCounterofferDraft(r.counteroffer_email)
-      setThread((t) => [...t, { role: 'assistant', text: `**Counteroffer drafted** for ${selectedId}.\n\n- ${r.seats} seats at **${aed(r.fare)}** per passenger\n- ${r.deadline_days}-day confirmation deadline\n\nReview and edit the email below. **Nothing has been sent.**` }])
-    } catch (e) { flash(errMsg(e)) } finally { setTyping(false) }
+      setAnswer(`Counteroffer drafted for ${selectedId}: ${r.seats} seats at ${aed(r.fare)} per passenger, ${r.deadline_days}-day deadline. It remains a draft for human review; nothing has been sent.`)
+    } catch (e) { setAnswer(''); flash(errMsg(e)) }
   }
 
   async function copyCounteroffer() {
@@ -280,30 +324,142 @@ export function GroupBookingDashboard() {
     } catch (e) { flash(errMsg(e)) } finally { setEmailSending(false) }
   }
 
-  async function ask(message: string) {
-    if (!message.trim() || !selectedId || chatBusy) return
-    setChatBusy(true); setTyping(true); setThread((t) => [...t, { role: 'user', text: message }])
-    try {
-      const r = await api.chat(`[Request ID: ${selectedId}] ${message}`, chatHistory)
-      setThread((t) => [...t, { role: 'assistant', text: r.response }]); setChatHistory(r.history)
-    } catch (e) { flash(errMsg(e)) } finally { setChatBusy(false); setTyping(false) }
-  }
+  const isRequestContext = activePage === 'requests' && !!selectedId
 
-  useEffect(() => { bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight, behavior: 'smooth' }) }, [thread, typing, counterofferDraft])
+  async function ask(message: string) {
+    if (!message.trim() || chatBusy) return
+    setChatBusy(true); setAnswer('Thinking…')
+    try {
+      const payload = isRequestContext ? `[Request ID: ${selectedId}] ${message}` : message
+      const r = await api.chat(payload, chatHistory)
+      setAnswer(r.response); setChatHistory(r.history)
+    } catch (e) { setAnswer(''); flash(errMsg(e)) } finally { setChatBusy(false) }
+  }
 
   const recColor = score ? REC_COLORS[score.recommendation] : undefined
 
-  return <main className="app-shell">
-    <aside className="sidebar">
-      <a className="brand" href="#dashboard" aria-label="Aeroform home"><span className="brand-mark"><Plane size={18} strokeWidth={2.2}/></span><span>Aeroform<span className="brand-sub">REVENUE INTELLIGENCE</span></span></a>
-      <div className="workspace-label">WORKSPACE <ChevronDown size={13}/></div>
+  function getWhyExplanation(s: typeof score, d: typeof detail): string {
+    if (!s) return ''
+    const rec = s.recommendation
+    const p = s.p_convert_at_best
+    const pStr = `${(p * 100).toFixed(1)}%`
+    const fareRatio = d?.fare_ratio ?? null
+    const lf = d?.load_factor ?? null
+    const lfStr = lf != null ? `${Math.round(lf * 100)}%` : null
+    if (rec === 'Accept') {
+      if (p >= 0.5) return `Conversion probability is high at ${pStr} — well above our acceptance threshold. The expected contribution of ${aed(s.expected_contribution)} is positive and risk of displacement is ${s.displacement_cost > 0 ? `AED ${Math.round(s.displacement_cost).toLocaleString()}` : 'nil'}.`
+      if (p >= 0.3) return `Decent conversion probability (${pStr}) with the agent quoting at or below the reference fare${fareRatio != null ? ` (${Math.round(fareRatio * 100)}% of ref)` : ''}. Expected contribution of ${aed(s.expected_contribution)} makes this a worthwhile deal.`
+      if (fareRatio != null && fareRatio <= 0.85) return `Agent is offering a ${Math.round((1 - fareRatio) * 100)}% discount off the reference fare. Even at a moderate P(convert) of ${pStr}, the expected contribution (${aed(s.expected_contribution)}) is positive${lfStr && lf! < 0.7 ? ` and the flight is only ${lfStr} full — displacement risk is low` : ''}.`
+      return `Expected contribution (${aed(s.expected_contribution)}) is positive and conversion probability (${pStr}) meets our acceptance threshold. ${s.lift_vs_baseline > 0 ? `AI pricing adds ${aed(s.lift_vs_baseline)} over the rule-based baseline.` : ''}`
+    }
+    if (rec === 'Counteroffer') {
+      if (p < 0.1) return `Conversion probability is very low at ${pStr} at the agent's quoted fare. A revised offer at ${aed(s.best_fare)}/pax could significantly improve the chance of conversion${s.displacement_cost > 0 ? ` while accounting for a displacement cost of ${aed(s.displacement_cost)}` : ''}.`
+      return `The agent's quoted fare produces suboptimal expected contribution. Countering at ${aed(s.best_fare)}/pax (P(convert) ${pStr}) maximises our expected return${lfStr ? ` on a ${lfStr} load-factor flight` : ''}.`
+    }
+    if (rec === 'Partial') {
+      return `Only ${s.best_seats} of the ${pax} requested seats can be offered. ${lfStr ? `The flight is already ${lfStr} full — ` : ''}blocking more seats would displace too much expected individual demand (displacement cost ${aed(s.displacement_cost)}). A partial allocation at ${aed(s.best_fare)}/pax still generates ${aed(s.expected_contribution)}.`
+    }
+    if (rec === 'Reject') {
+      if (s.expected_contribution <= 0) return `Expected contribution is negative (${aed(s.expected_contribution)}) — accepting this group would cost more than it earns after accounting for displaced individual bookings. Rejecting preserves capacity for higher-value demand.`
+      return `Conversion probability (${pStr}) is below our minimum threshold. The probability-weighted expected contribution does not justify blocking ${pax} seats${lfStr ? ` on a ${lfStr} load-factor flight` : ''}.`
+    }
+    return `P(convert) = ${pStr} · Expected contribution = ${aed(s.expected_contribution)}.`
+  }
+
+  function onSidebarDragStart(e: React.MouseEvent) {
+    e.preventDefault()
+    sidebarDragRef.current = { startX: e.clientX, startWidth: sidebarWidth }
+    const onMove = (ev: MouseEvent) => {
+      if (!sidebarDragRef.current) return
+      const delta = ev.clientX - sidebarDragRef.current.startX
+      const next = Math.max(48, Math.min(400, sidebarDragRef.current.startWidth + delta))
+      setSidebarWidth(next)
+      setSidebarCollapsed(next < 100)
+    }
+    const onUp = () => {
+      sidebarDragRef.current = null
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  function onAgentDragStart(e: React.MouseEvent) {
+    e.preventDefault()
+    agentDragRef.current = { startX: e.clientX, startWidth: agentWidth }
+    const onMove = (ev: MouseEvent) => {
+      if (!agentDragRef.current) return
+      const delta = agentDragRef.current.startX - ev.clientX
+      const next = Math.max(40, Math.min(560, agentDragRef.current.startWidth + delta))
+      setAgentWidth(next)
+      setPanelOpen(next > 80)
+    }
+    const onUp = () => {
+      agentDragRef.current = null
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  // Dynamic context-aware suggestions based on actual request data
+  const suggestions = useMemo(() => {
+    const s: { label: string; action: () => void }[] = []
+    if (!isRequestContext || !score || !selected) {
+      return [
+        { label: 'What factors drive group booking conversion?', action: () => ask('What factors most influence whether a group booking agent converts a quote?') },
+        { label: 'How does displacement cost work?', action: () => ask('Explain displacement cost and how it affects group booking decisions.') },
+        { label: 'What is a good P(convert) for a group request?', action: () => ask('What P(convert) threshold should we use to decide whether to accept, counteroffer or reject a group request?') },
+        { label: 'How does the AI recommendation differ from baseline?', action: () => ask('How does the AI optimizer recommendation differ from the rule-based baseline approach?') },
+      ]
+    }
+    // 1. Recommendation-specific
+    if (score.recommendation === 'Accept')
+      s.push({ label: `Why accept at ${aed(score.best_fare)}/pax?`, action: () => ask(`Why are we recommending to accept this group at ${aed(score.best_fare)} per passenger?`) })
+    else if (score.recommendation === 'Counteroffer')
+      s.push({ label: `Why counter at ${aed(score.best_fare)} instead of accepting?`, action: () => ask(`Why should we counteroffer at ${aed(score.best_fare)} rather than accepting the agent's quoted fare?`) })
+    else if (score.recommendation === 'Reject')
+      s.push({ label: 'Why are we rejecting this request?', action: () => ask('Why is the AI recommending rejection for this group request? What would need to change to make it viable?') })
+    else if (score.recommendation === 'Partial')
+      s.push({ label: `Why only ${score.best_seats} of ${pax} seats?`, action: () => ask(`Why can we only offer ${score.best_seats} seats when the agent requested ${pax}?`) })
+    // 2. Load factor / displacement
+    if (detail?.load_factor && detail.load_factor > 0.75)
+      s.push({ label: `Flight is ${Math.round(detail.load_factor * 100)}% full — displacement risk?`, action: () => ask(`The flight is at ${Math.round(detail.load_factor! * 100)}% load factor. What is the displacement risk of blocking seats for this group?`) })
+    else if (score.displacement_cost === 0)
+      s.push({ label: 'No displacement cost — safe to accept?', action: () => ask('The displacement cost is zero. Does this mean there is no risk to accepting this group?') })
+    // 3. Conversion probability
+    if (score.p_convert_at_best < 0.08)
+      s.push({ label: `Only ${pct(score.p_convert_at_best)} conversion — what can improve it?`, action: () => ask(`The conversion probability is very low at ${pct(score.p_convert_at_best)}. What factors are driving this down and what could improve it?`) })
+    else if (score.p_convert_at_best > 0.35)
+      s.push({ label: `${pct(score.p_convert_at_best)} conversion — is this a priority deal?`, action: () => ask(`Conversion probability is high at ${pct(score.p_convert_at_best)}. Should we fast-track this request and what terms should we prioritise?`) })
+    // 4. Fare vs reference
+    if (detail?.fare_ratio && detail.fare_ratio < 0.85)
+      s.push({ label: `Agent quoting ${Math.round(detail.fare_ratio * 100)}% of ref — good deal?`, action: () => ask(`The agent is quoting at only ${Math.round(detail.fare_ratio! * 100)}% of the reference fare. Is this a good deal for us?`) })
+    // 5. Lift vs baseline
+    if (score.lift_vs_baseline > 500)
+      s.push({ label: `AI adds ${aed(score.lift_vs_baseline)} over baseline — how?`, action: () => ask(`The AI recommendation generates ${aed(score.lift_vs_baseline)} more than the rule-based baseline. How is it achieving this?`) })
+    // 6. Always offer counteroffer
+    s.push({ label: 'Draft a counteroffer email', action: draftCounteroffer })
+    return s.slice(0, 4)
+  }, [score, selected, detail, pax])
+
+  return <main className={`app-shell${sidebarCollapsed ? ' sidebar-is-collapsed' : ''}`}>
+    <aside className={`sidebar${sidebarCollapsed ? ' sidebar-collapsed' : ''}`} style={{ width: sidebarCollapsed ? 60 : sidebarWidth }}>
+      <div className="sidebar-drag-handle" onMouseDown={onSidebarDragStart} title="Drag to resize"/>
+      <a className="brand" href="#dashboard" aria-label="GroupLens home"><span className="brand-mark"><Plane size={18} strokeWidth={2.2}/></span>{!sidebarCollapsed && <span>GroupLens<span className="brand-sub">GROUP BOOKING AI</span></span>}</a>
+      {!sidebarCollapsed && <div className="workspace-label">WORKSPACE <ChevronDown size={13}/></div>}
       <nav aria-label="Main navigation">
-        <button type="button" className={`nav-item ${activePage === 'overview' ? 'active' : ''}`} onClick={() => setActivePage('overview')}><LayoutDashboard size={17}/> Overview</button>
-        <button type="button" className={`nav-item ${activePage === 'requests' ? 'active' : ''}`} onClick={() => setActivePage('requests')}><FileText size={17}/> Open requests <span className="nav-count">{total}</span></button>
-        <button type="button" className={`nav-item ${activePage === 'all-requests' ? 'active' : ''}`} onClick={() => { setActivePage('all-requests'); setAllReqState((s) => s === 'error' ? 'idle' : s) }}><List size={17}/> All requests</button>
-        <button type="button" className={`nav-item ${activePage === 'audit' ? 'active' : ''}`} onClick={() => setActivePage('audit')}><History size={17}/> Decision log</button>
+        <button type="button" className={`nav-item ${activePage === 'overview' ? 'active' : ''}`} onClick={() => setActivePage('overview')} title="Overview"><LayoutDashboard size={17}/>{!sidebarCollapsed && <> Overview</>}</button>
+        <button type="button" className={`nav-item ${activePage === 'requests' ? 'active' : ''}`} onClick={() => setActivePage('requests')} title="Open requests"><FileText size={17}/>{!sidebarCollapsed && <> Open requests <span className="nav-count">{total}</span></>}{sidebarCollapsed && total > 0 && <span className="nav-count-dot"/>}</button>
+        <button type="button" className={`nav-item ${activePage === 'all-requests' ? 'active' : ''}`} onClick={() => { setActivePage('all-requests'); setAllReqState((s) => s === 'error' ? 'idle' : s) }} title="All requests"><List size={17}/>{!sidebarCollapsed && <> All requests</>}</button>
+        <button type="button" className={`nav-item ${activePage === 'audit' ? 'active' : ''}`} onClick={() => setActivePage('audit')} title="Decision log"><History size={17}/>{!sidebarCollapsed && <> Decision log</>}</button>
       </nav>
-      <div className="sidebar-bottom"><div className="profile"><div className="avatar dark">RM</div><div><b>Revenue Manager</b><span>Group desk</span></div><ChevronDown size={15}/></div></div>
+      <div className="sidebar-bottom">
+        <button type="button" className="sidebar-collapse-btn" onClick={() => { const c = !sidebarCollapsed; setSidebarCollapsed(c); if (!c && sidebarWidth < 100) setSidebarWidth(224) }} aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}>{sidebarCollapsed ? <ChevronRight size={15}/> : <ChevronLeft size={15}/>}</button>
+        {!sidebarCollapsed && <div className="profile"><div className="avatar dark">RM</div><div><b>Revenue Manager</b><span>Group desk</span></div><ChevronDown size={15}/></div>}
+      </div>
     </aside>
 
     <section className="main-content" id="dashboard">
@@ -321,33 +477,22 @@ export function GroupBookingDashboard() {
         {/* ── OPEN REQUESTS PAGE ────────────────────────────────────── */}
         {activePage === 'requests' && <>
 
-        {/* Queue list (shown when not collapsed) */}
+        {/* Queue panel — full width, collapses when a request is opened */}
         {!queueCollapsed && <section className="panel queue-panel" style={{marginBottom:14}}>
           <div className="panel-head">
-            <div><div className="panel-title">Requests to review <span className="count-badge">{filtered.length === requests.length ? total : `${filtered.length} of ${requests.length}`}</span></div><div className="panel-caption">Click a request to review and act on it</div></div>
-          </div>
-          {/* Dropdown filters */}
-          <div className="filter-dropdowns">
-            <StatusFilter label="Filter requests by status" value={statusFilter} onChange={setStatusFilter} total={requests.length} options={statuses.map((st) => ({ value: st, count: statusCounts[st] }))}/>
-            <div className="filter-select-wrap">
-              <Plane size={12}/>
-              <select aria-label="Filter by route" value={routeFilter} onChange={(e) => setRouteFilter(e.target.value)}>
-                <option value="">All routes</option>
-                {routes.map((r) => <option key={r} value={r}>{route(r)}</option>)}
-              </select>
+            <div><div className="panel-title">Requests to review <span className="count-badge">{filtered.length === requests.length ? total : `${filtered.length} of ${requests.length}`}</span></div><div className="panel-caption">Open group requests</div></div>
+            <div style={{display:'flex',gap:7,alignItems:'center'}}>
+              <button type="button" className={`subtle-button filter-toggle ${statusFilter.length ? 'active' : ''}`} aria-expanded={filterOpen} onClick={() => setFilterOpen((o) => !o)}><Filter size={13}/> Filter{statusFilter.length > 0 && <span className="filter-badge">{statusFilter.length}</span>}</button>
+              {hasFilters && <button type="button" className="filter-clear" onClick={clearFilters}>Clear</button>}
             </div>
-            <div className="filter-select-wrap">
-              <Activity size={12}/>
-              <select aria-label="Filter by flight" value={flightFilter} onChange={(e) => setFlightFilter(e.target.value)}>
-                <option value="">All flights</option>
-                {flights.map((f) => <option key={f} value={f}>{f}</option>)}
-              </select>
-            </div>
-            <label className="search-box inline-search"><Search size={13}/><input ref={searchRef} aria-label="Search requests" placeholder="Search…" value={query} onChange={(e) => setQuery(e.target.value)}/><kbd>Ctrl K</kbd></label>
-            {hasFilters && <button type="button" className="filter-clear" onClick={clearFilters}>Clear</button>}
           </div>
-          {/* Prob legend */}
-          <div className="prob-legend"><span className="prob-dot prob-high"/>High conv. (&ge;35%)<span className="prob-dot prob-mid"/>Medium (12–35%)<span className="prob-dot prob-low"/>Low (&lt;12%)<span className="prob-dot prob-none"/>Not scored</div>
+          {(filterOpen || statusFilter.length > 0) && <div className="filter-bar" role="group" aria-label="Filter by status">
+            <span className="filter-label">STATUS</span>
+            {statuses.map((st) => <button type="button" key={st} className={`filter-chip ${statusFilter.includes(st) ? 'on' : ''}`} aria-pressed={statusFilter.includes(st)} onClick={() => toggleStatus(st)}>{st} <i>{statusCounts[st]}</i></button>)}
+            {statusFilter.length > 0 && <button type="button" className="filter-clear" onClick={() => setStatusFilter([])}>Clear</button>}
+          </div>}
+          <label className="search-box"><Search size={13}/><input ref={searchRef} aria-label="Search requests" placeholder="Search requests…" value={query} onChange={(e) => setQuery(e.target.value)}/><kbd>Ctrl K</kbd></label>
+          <div className="prob-legend"><span className="prob-dot prob-high"/>High (&ge;15%)<span className="prob-dot prob-mid"/>Mid (4–15%)<span className="prob-dot prob-low"/>Low (&lt;4%)<span className="prob-dot prob-none"/>Not scored</div>
           <div className="request-list">
             {pageRows.map((r) => {
               const p = scoreMap[r.request_id]
@@ -358,112 +503,213 @@ export function GroupBookingDashboard() {
                   <span className="request-meta">{r.flight_number} · {r.group_size} pax · {aed(r.quoted_fare_per_pax)}/pax</span>
                 </span>
                 <span className="request-side">
-                  <StatusBadge status={r.status}/>
+                  <span className={`status ${r.status.toLowerCase()}`}>{r.status}</span>
                   <span className="request-date"><Clock3 size={12}/>{daysLeft(r.departure_dt) ?? '—'}d left</span>
                   {p != null && <span className={`prob-badge ${pConvertClass(p)}`}>{pct(p)}</span>}
                 </span>
               </button>
             })}
             {listState === 'loading' && Array.from({ length: 5 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true"/>)}
-            {listState === 'ready' && filtered.length === 0 && <div className="empty-state">No requests match current filters. <button type="button" className="filter-clear" onClick={clearFilters}>Clear filters</button></div>}
+            {listState === 'ready' && filtered.length === 0 && <div className="empty-state">No requests match{statusFilter.length ? ` ${statusFilter.join(' / ')}` : ''}{query ? ` "${query}"` : ''}. <button type="button" className="filter-clear" onClick={clearFilters}>Clear filters</button></div>}
           </div>
           {filtered.length > 0 && <nav className="pagination" aria-label="Requests pagination"><span className="page-info">{(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filtered.length)} of {filtered.length}</span><div className="page-controls"><button type="button" className="page-btn" aria-label="Previous page" disabled={safePage === 1} onClick={() => setPage(safePage - 1)}>&#8249;</button>{pageList(safePage, totalPages).map((n, i) => n === '…' ? <span key={`e${i}`} className="page-gap">…</span> : <button type="button" key={n} className={`page-btn ${n === safePage ? 'current' : ''}`} aria-current={n === safePage ? 'page' : undefined} onClick={() => setPage(n)}>{n}</button>)}<button type="button" className="page-btn" aria-label="Next page" disabled={safePage === totalPages} onClick={() => setPage(safePage + 1)}>&#8250;</button></div><label className="page-size">Rows<select aria-label="Rows per page" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>{PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}</select></label></nav>}
         </section>}
 
-        {/* Full detail view when queue is collapsed */}
-        {queueCollapsed && selectedId && <section className="panel request-detail-card">
-          <div className="request-detail-nav">
-            <button type="button" className="back-btn" onClick={() => setQueueCollapsed(false)}><ChevronLeft size={14}/> All requests</button>
-            <div className="request-detail-nav-right">
-              {scoring && <span className="scoring-badge">Scoring…</span>}
-              {score && <span className={`prob-badge large ${pConvertClass(score.p_convert_at_best)}`}>{pct(score.p_convert_at_best)} P(convert)</span>}
-              {(detail?.status ?? selected?.status) ? <StatusBadge status={(detail?.status ?? selected?.status) as string}/> : <span>—</span>}
+        {/* Collapsed queue bar — click to return to list */}
+        {queueCollapsed && <div className="queue-collapsed-bar" style={{marginBottom:12}}>
+          <button type="button" className="subtle-button" onClick={() => setQueueCollapsed(false)}><ChevronLeft size={13}/> Back to requests</button>
+          <span className="queue-collapsed-info">{filtered.length} request{filtered.length !== 1 ? 's' : ''} in queue{hasFilters && <> · <button type="button" className="filter-clear" onClick={clearFilters}>Clear filters</button></>}</span>
+        </div>}
+
+        {/* Request detail card — shown when queue collapsed */}
+        {queueCollapsed && selectedId && selected && <section className="panel request-detail-card" style={{marginBottom:14}}>
+          <div className="panel-head">
+            <div>
+              <div className="panel-title">{route(selected.ond)} <span className="request-id" style={{marginLeft:8}}>{selected.request_id}</span></div>
+              <div className="panel-caption">{selected.flight_number} · Departs {fmtDate(selected.departure_dt)}{left != null ? ` · ${left}d left` : ''}</div>
             </div>
+            <span className={`status ${selected.status.toLowerCase()}`}>{selected.status}</span>
           </div>
-          <div className="request-detail-title">
-            <h2>{route(detail?.ond ?? selected?.ond ?? '')}</h2>
-            <span className="request-detail-ids">{detail?.request_id ?? selected?.request_id} <i>·</i> {detail?.group_request_id ?? '—'}</span>
+          <div className="detail-table-grid">
+            <table className="detail-table">
+              <tbody>
+                <tr><td>Request ID</td><td><code>{selected.request_id}</code></td></tr>
+                <tr><td>Group ID</td><td><code>{selected.group_request_id}</code></td></tr>
+                <tr><td>Created</td><td>{fmtTs(selected.created_on)}</td></tr>
+                <tr><td>Route</td><td>{route(selected.ond)}</td></tr>
+                <tr><td>Flight</td><td>{selected.flight_number ?? '—'}</td></tr>
+                <tr><td>Departure</td><td>{fmtDate(selected.departure_dt)}{left != null ? <span style={{marginLeft:6,color:'#ff0041',fontWeight:700}}>{left}d left</span> : ''}</td></tr>
+                <tr><td>Trip type</td><td>{detail?.trip_type ?? (scoring ? '…' : '—')}</td></tr>
+                <tr><td>Lead time</td><td>{detail?.lead_time != null ? `${Math.round(detail.lead_time)} days` : scoring ? '…' : '—'}</td></tr>
+                <tr><td>No. of options</td><td>{detail?.num_options ?? (scoring ? '…' : '—')}</td></tr>
+              </tbody>
+            </table>
+            <table className="detail-table">
+              <tbody>
+                <tr><td>Group size</td><td>{pax} pax</td></tr>
+                <tr><td>Quoted fare</td><td>{aed(selected.quoted_fare_per_pax)} / pax</td></tr>
+                <tr><td>Reference fare</td><td>{aed(refFare)} / pax</td></tr>
+                <tr><td>Fare ratio</td><td>{detail?.fare_ratio != null ? `${(detail.fare_ratio * 100).toFixed(1)}% of ref` : scoring ? '…' : '—'}</td></tr>
+                <tr><td>Competitor fare</td><td>{detail?.competitor_fare ? aed(detail.competitor_fare) : '—'}</td></tr>
+                <tr><td>Load factor</td><td>{detail?.load_factor != null ? `${Math.round(detail.load_factor * 100)}%` : scoring ? '…' : '—'}</td></tr>
+                <tr><td>Seats available</td><td>{detail?.seats_available ?? (scoring ? '…' : '—')}</td></tr>
+                <tr><td>Agent</td><td>{detail?.agent_code ?? '—'}{detail?.agent_email ? <span style={{color:'#8a9199',marginLeft:6,fontWeight:400}}>{detail.agent_email}</span> : ''}</td></tr>
+                <tr><td>Agent conv. rate</td><td>{detail ? pct(detail.agent_conv_rate) : '—'}<span style={{color:'#8a9199',marginLeft:6,fontWeight:400,fontSize:'.72rem'}}>({detail?.agent_prior_requests ?? '—'} prior requests)</span></td></tr>
+                <tr><td>Route conv. rate</td><td>{detail ? pct(detail.route_conv_rate) : '—'}<span style={{color:'#8a9199',marginLeft:6,fontWeight:400,fontSize:'.72rem'}}>({detail?.route_prior_requests ?? '—'} on this route)</span></td></tr>
+              </tbody>
+            </table>
           </div>
-          <div className="request-detail-grid">
-            <DetailField label="Flight" value={detail?.flight_number ?? selected?.flight_number ?? '—'}/>
-            <DetailField label="Departure" value={fmtDate(detail?.departure_dt ?? selected?.departure_dt ?? null)}/>
-            <DetailField label="Dep. time" value={fmtTime(detail?.departure_dt ?? selected?.departure_dt ?? null)}/>
-            <DetailField label="Days to dep." value={left != null ? `${left} days` : '—'}/>
-            <DetailField label="Trip type" value={detail?.trip_type ?? '—'}/>
-            <DetailField label="Group size" value={detail?.group_size != null ? `${detail.group_size} pax` : selected?.group_size ? `${selected.group_size} pax` : '—'}/>
-            <DetailField label="Agent code" value={detail?.agent_code ?? '—'}/>
-            <DetailField label="Agent email" value={detail?.agent_email ?? '—'}/>
-            <DetailField label="Quoted fare" value={aed(detail?.quoted_fare_per_pax ?? selected?.quoted_fare_per_pax)}/>
-            <DetailField label="Ref. fare" value={aed(detail?.ref_fare ?? selected?.ref_fare)}/>
-            <DetailField label="Fare ratio" value={detail?.fare_ratio != null ? `${(detail.fare_ratio * 100).toFixed(0)}%` : '—'}/>
-            <DetailField label="Competitor fare" value={aed(detail?.competitor_fare)}/>
-            <DetailField label="Load factor" value={detail?.load_factor != null ? `${Math.round(detail.load_factor * 100)}%` : '—'}/>
-            <DetailField label="Seats available" value={detail?.seats_available != null ? String(detail.seats_available) : '—'}/>
-            <DetailField label="Lead time" value={detail?.lead_time != null ? `${Math.round(detail.lead_time)} days` : '—'}/>
-            <DetailField label="Agent conv. rate" value={detail ? pct(detail.agent_conv_rate) : '—'}/>
-            <DetailField label="Route conv. rate" value={detail ? pct(detail.route_conv_rate) : '—'}/>
-            <DetailField label="Agent prior reqs." value={detail?.agent_prior_requests != null ? String(detail.agent_prior_requests) : '—'}/>
-            <DetailField label="Route prior reqs." value={detail?.route_prior_requests != null ? String(detail.route_prior_requests) : '—'}/>
-            <DetailField label="Options" value={detail?.num_options != null ? String(detail.num_options) : '—'}/>
-          </div>
+          {detail?.load_factor != null && <><div style={{marginTop:10,marginBottom:3,fontSize:'.72rem',color:'#8a9199',fontWeight:600,textTransform:'uppercase',letterSpacing:'.05em'}}>Flight load</div><div className="capacity-bar"><span style={{ width: `${Math.round(detail.load_factor * 100)}%` }}/></div></>}
         </section>}
 
-        {/* AI recommendation + action buttons */}
-        <div style={{marginBottom:14}}>
-          <section className="panel recommendation-panel">
-            <div className="panel-head"><div><div className="panel-title">AI recommendation <span className="ai-tag"><Sparkles size={11}/> ASSIST</span></div><div className="panel-caption">{selected ? `${selected.request_id} · ${route(selected.ond)} · ${fmtDate(selected.departure_dt)}` : 'No request selected'}</div></div></div>
-            {scoring && <div className="empty-state">Scoring request — this can take a few seconds…</div>}
-            {scoreError && <div className="empty-state" role="alert">{scoreError} <button className="subtle-button" onClick={() => setRetryTick((n) => n + 1)}>Retry</button></div>}
-            {!selectedId && !scoring && <div className="empty-state">Select a request from the list to see the AI recommendation.</div>}
-            {score && <>
-            <div className="recommendation-banner"><div className="recommend-icon" style={{ background: recColor }}><Sparkles size={17}/></div><div><div className="recommend-label">RECOMMENDED ACTION</div><strong style={{ color: recColor }}>{REC_LABELS[score.recommendation] ?? score.recommendation}</strong></div><span className="confidence">{pct(score.p_convert_base)} base P(convert)</span></div>
-            <div className="offer-grid"><Offer label="Proposed fare" value={aed(fare)} suffix="/ passenger"/><Offer label="Seat allocation" value={`${seats}`} suffix={`of ${pax} seats`}/><Offer label="Confirmation deadline" value={`${deadline} days`} suffix="after quote"/><Offer label="Conversion probability" value={pct(probability)} suffix="model estimate" highlight/></div>
-            <label className="deadline-control">Confirmation deadline<select value={deadline} onChange={(e) => setDeadline(Number(e.target.value))}>{DEADLINES.map((d) => <option key={d} value={d}>{d} days</option>)}</select></label>
-            <div className="contribution-line"><span>Expected incremental contribution</span><b className={(contribution ?? 0) > 0 ? 'positive-value' : ''}>{aed(contribution)}</b></div>
-            <p className="recommend-copy">Optimizer pick: {score.best_seats} seats at {aed(score.best_fare)} within {score.best_deadline_days} days, worth {aed(score.expected_contribution)} vs. {aed(score.baseline_contribution)} for the rule-based baseline. Displacement cost: {aed(score.displacement_cost)}.</p>
-            <div className="button-row"><button disabled={busy} className={`primary-button ${decision && decision !== 'reject' ? 'is-approved' : ''}`} onClick={() => decide('approve')}>{decision && decision !== 'reject' ? <><Check size={15}/> Recorded</> : <><Check size={15}/> {offerChanged ? 'Approve edited offer' : 'Approve recommendation'}</>}</button><button disabled={busy} className="outline-button" onClick={() => decide('reject')}><X size={15}/> {decision === 'reject' ? 'Rejected' : 'Reject'}</button><button className="outline-button draft-button" onClick={draftCounteroffer}><FileText size={14}/> Draft counteroffer</button></div>
-            </>}
-          </section>
-        </div>
+        {/* AI recommendation — full width below detail card */}
+        {selectedId && queueCollapsed && <section className={`panel recommendation-panel${score ? ` rec-${score.recommendation.toLowerCase()}` : ''}`} style={{marginBottom:14}}>
+          <div className="panel-head"><div><div className="panel-title">AI recommendation <span className="ai-tag"><Sparkles size={11}/> ASSIST</span></div><div className="panel-caption">{selected ? `${selected.request_id} · ${route(selected.ond)} · ${fmtDate(selected.departure_dt)}` : 'No request selected'}</div></div>
+            <div style={{display:'flex',gap:6,alignItems:'center'}}>
+              {scoring && <span className="scoring-badge">Scoring…</span>}
+              {score && <span className={`prob-badge large ${pConvertClass(score.p_convert_at_best)}`}>{pct(score.p_convert_at_best)}</span>}
+            </div>
+          </div>
+          {scoreError && <div className="empty-state" role="alert">{scoreError} <button className="subtle-button" onClick={() => setRetryTick((n) => n + 1)}>Retry</button></div>}
+          {scoring && !score && <div className="empty-state">Scoring request…</div>}
+          {score && <>
+          <div className={`recommendation-banner rec-${score.recommendation.toLowerCase()}`}><div className="recommend-icon"><Sparkles size={17}/></div><div><div className="recommend-label">RECOMMENDED ACTION</div><strong>{REC_LABELS[score.recommendation] ?? score.recommendation}</strong></div><span className="confidence">{pct(score.p_convert_base)} base P(convert)</span></div>
+          <div className="offer-grid"><Offer label="Proposed fare" value={aed(fare)} suffix={`/ pax · ref ${aed(refFare)}`}/><Offer label="Seat allocation" value={`${seats} of ${pax} seats`} suffix={seats < pax ? 'partial allocation' : 'full request met'}/><Offer label="Agent must confirm within" value={`${deadline} days`} suffix="of receiving this offer"/><Offer label="Conversion probability" value={pct(probability)} suffix="model estimate" highlight/></div>
+          <div className="insight-breakdown">
+            <div className="insight-row">
+              <div className="insight-item"><span className="insight-label">Expected contribution</span><b className={`insight-value ${(contribution ?? 0) > 0 ? 'positive' : 'negative'}`}>{aed(contribution)}</b><small>if group converts</small></div>
+              <div className="insight-item"><span className="insight-label">Rule-based baseline</span><b className="insight-value">{aed(score.baseline_contribution)}</b><small>historical avg for this route</small></div>
+              <div className="insight-item"><span className="insight-label">Lift vs baseline</span><b className={`insight-value ${score.lift_vs_baseline >= 0 ? 'positive' : 'negative'}`}>{score.lift_vs_baseline >= 0 ? '+' : ''}{aed(score.lift_vs_baseline)}</b><small>AI vs rule-based gain</small></div>
+              <div className="insight-item"><span className="insight-label">Displacement cost</span><b className={`insight-value ${score.displacement_cost > 0 ? 'negative' : ''}`}>{aed(score.displacement_cost)}</b><small>{score.displacement_cost > 0 ? 'demand displaced' : 'no demand displaced'}</small></div>
+            </div>
+          </div>
+          <div className="button-row"><button disabled={busy} className={`action-btn approve-btn ${decision && decision !== 'reject' ? 'is-approved' : ''}`} onClick={() => decide('approve')}><Check size={14}/> {decision && decision !== 'reject' ? 'Recorded' : offerChanged ? 'Approve Edit' : 'Approve'}</button><button disabled={busy} className="action-btn reject-btn" onClick={() => decide('reject')}><X size={14}/> {decision === 'reject' ? 'Rejected' : 'Reject'}</button><button className="action-btn counter-btn" onClick={draftCounteroffer}><FileText size={14}/> Counteroffer</button></div>
+          </>}
+        </section>}
 
-        {/* Analysis + inventory (shown when request is selected and detail is open) */}
+        {/* Analysis panels */}
         {selectedId && queueCollapsed && <>
         <div className="analysis-grid">
           <section className="panel analysis-panel"><div className="panel-head"><div><div className="panel-title">Scenario analysis</div><div className="panel-caption">Adjust the offer to explore the trade-off</div></div><span className="model-tag"><span className="live-dot"/> MODEL-BASED</span></div>
             {score ? <>
-            <div className="scenario-controls"><label>Fare per passenger <strong>{aed(fare)}</strong><input aria-label="Fare per passenger" type="range" min={Math.round(fareMin)} max={Math.round(fareMax)} step="5" value={fare} onChange={(e) => setFare(Number(e.target.value))}/><span className="range-labels"><span>70% · {aed(fareMin)}</span><span>120% · {aed(fareMax)}</span></span></label><label>Seats to allocate <strong>{seats} seats</strong><input aria-label="Seats to allocate" type="range" min="1" max={Math.max(1, pax, score.best_seats)} step="1" value={seats} onChange={(e) => setSeats(Number(e.target.value))}/><span className="range-labels"><span>1 seat</span><span>{Math.max(pax, score.best_seats)} max</span></span></label></div>
-            {scenario && <div className="assumption-note">Group revenue {aed(scenario.group_revenue)} · displacement {aed(scenario.displacement_cost)} · holding {aed(scenario.holding_cost)}</div>}
-            <div className="chart-wrap"><div className="chart-top"><span>Fare response curve</span><span className="chart-legend"><i/> Conversion probability</span></div><div className="curve-chart"><div className="y-labels">{yTicks.map((t) => <span key={t}>{t}</span>)}</div><div className="chart-plot"><div className="grid-line one"/><div className="grid-line two"/><div className="grid-line three"/><svg viewBox="0 0 500 160" preserveAspectRatio="none" role="img" aria-label="Conversion probability versus fare"><defs><linearGradient id="fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#ff0041" stopOpacity=".16"/><stop offset="100%" stopColor="#ff0041" stopOpacity="0"/></linearGradient></defs>{linePath && <><path d={`${linePath} L500,160 L0,160Z`} fill="url(#fill)"/><path d={linePath} fill="none" stroke="#ff0041" strokeWidth="3" vectorEffect="non-scaling-stroke"/></>}<line x1={`${xPct(refFare)}%`} y1="0" x2={`${xPct(refFare)}%`} y2="100%" stroke="#6b777c" strokeDasharray="2 4"/><line x1={`${xPct(score.best_fare)}%`} y1="0" x2={`${xPct(score.best_fare)}%`} y2="100%" stroke="#00b26e"/><line x1={`${xPct(fare)}%`} y1="0" x2={`${xPct(fare)}%`} y2="100%" stroke="#e39c4e" strokeDasharray="4 4"/></svg><div className="x-labels"><span>{Math.round(fareMin)}</span><span>ref {Math.round(refFare)}</span><span>{Math.round(fareMax)} AED</span></div></div></div></div>
+            <div className="scenario-controls"><label>Confirmation deadline<select className="deadline-select" value={deadline} onChange={(e) => setDeadline(Number(e.target.value))}>{DEADLINES.map((d) => <option key={d} value={d}>{d} days — agent must confirm within {d} days of receiving offer</option>)}</select></label><label>Fare per passenger <strong>{aed(fare)}</strong><input aria-label="Fare per passenger" type="range" min={Math.round(fareMin)} max={Math.round(fareMax)} step="5" value={fare} onChange={(e) => setFare(Number(e.target.value))}/><span className="range-labels"><span>70% · {aed(fareMin)}</span><span>120% · {aed(fareMax)}</span></span></label><label>Seats to allocate <strong>{seats} seats</strong><input aria-label="Seats to allocate" type="range" min="1" max={Math.max(1, pax, score.best_seats)} step="1" value={seats} onChange={(e) => setSeats(Number(e.target.value))}/><span className="range-labels"><span>1 seat</span><span>{Math.max(pax, score.best_seats)} max</span></span></label></div>
+            {scenario && <div className="scenario-result-row">
+              <div className="scenario-result-item"><span>Group revenue</span><b className="positive">{aed(scenario.group_revenue)}</b></div>
+              <div className="scenario-result-item"><span>Displacement cost</span><b className={scenario.displacement_cost > 0 ? 'negative' : ''}>{aed(scenario.displacement_cost)}</b></div>
+              <div className="scenario-result-item"><span>P(convert)</span><b>{pct(scenario.p_convert)}</b></div>
+              <div className="scenario-result-item"><span>Expected contribution</span><b className={scenario.expected_contribution > 0 ? 'positive' : 'negative'}>{aed(scenario.expected_contribution)}</b></div>
+            </div>}
+            <div className="chart-wrap">
+              <div className="chart-top"><span>Fare response curve</span><span className="chart-legend"><i style={{background:'#ff0041'}}/> P(convert)</span></div>
+              <div className="fare-line-legend">
+                <span><i className="fare-swatch" style={{background:'#b0b8bd'}}/> Ref fare {aed(refFare)}</span>
+                <span><i className="fare-swatch" style={{background:'#00b26e'}}/> AI best {aed(score.best_fare)}</span>
+                <span><i className="fare-swatch" style={{background:'#e39c4e',borderStyle:'dashed'}}/> Selected {aed(fare)}</span>
+              </div>
+              <div className="curve-chart"><div className="y-labels">{yTicks.map((t) => <span key={t}>{t}</span>)}</div><div className="chart-plot"><div className="grid-line one"/><div className="grid-line two"/><div className="grid-line three"/><svg viewBox="0 0 500 160" preserveAspectRatio="none" role="img" aria-label="Conversion probability versus fare"><defs><linearGradient id="fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#ff0041" stopOpacity=".2"/><stop offset="100%" stopColor="#ff0041" stopOpacity="0"/></linearGradient></defs>{linePath && <><path d={`${linePath} L500,160 L0,160Z`} fill="url(#fill)"/><path d={linePath} fill="none" stroke="#ff0041" strokeWidth="2.5" vectorEffect="non-scaling-stroke"/></>}<line x1={`${xPct(refFare)}%`} y1="0" x2={`${xPct(refFare)}%`} y2="100%" stroke="#b0b8bd" strokeWidth="1.5" vectorEffect="non-scaling-stroke"/><line x1={`${xPct(score.best_fare)}%`} y1="0" x2={`${xPct(score.best_fare)}%`} y2="100%" stroke="#00b26e" strokeWidth="2" vectorEffect="non-scaling-stroke"/><line x1={`${xPct(fare)}%`} y1="0" x2={`${xPct(fare)}%`} y2="100%" stroke="#e39c4e" strokeWidth="1.5" strokeDasharray="4 3" vectorEffect="non-scaling-stroke"/></svg><div className="x-labels"><span>{Math.round(fareMin)} AED</span><span style={{color:'#00b26e',fontWeight:700}}>best {Math.round(score.best_fare)}</span><span>{Math.round(fareMax)} AED</span></div></div></div>
+            </div>
             </> : <div className="empty-state">{scoring ? 'Waiting for score…' : 'Select a request'}</div>}
           </section>
-          <section className="panel drivers-panel"><div className="panel-head"><div><div className="panel-title">What drives this decision?</div><div className="panel-caption">Top SHAP factors for P(convert)</div></div></div>
-            {drivers.map((d) => <Driver key={d.feature} label={featureLabel(d.feature)} detail={`value ${Number(d.value.toFixed(3))}`} value={`${d.shap_value >= 0 ? '+' : ''}${d.shap_value.toFixed(2)}`} positive={d.shap_value >= 0} negative={d.shap_value < 0} width={`${Math.max(4, (Math.abs(d.shap_value) / maxShap) * 100)}%`}/>)}
+          <section className="panel drivers-panel"><div className="panel-head"><div><div className="panel-title">What drives this decision?</div><div className="panel-caption">Why did the AI give this conversion probability?</div></div></div>
+            {drivers.map((d) => <Driver key={d.feature} label={featureLabel(d.feature)} detail={d.shap_value >= 0 ? '↑ raises conversion' : '↓ lowers conversion'} value={`${d.shap_value >= 0 ? '+' : ''}${d.shap_value.toFixed(3)}`} positive={d.shap_value >= 0} negative={d.shap_value < 0} width={`${Math.max(4, (Math.abs(d.shap_value) / maxShap) * 100)}%`}/>)}
             {!drivers.length && <div className="empty-state">{scoring ? 'Waiting for score…' : 'No drivers yet'}</div>}
-            <div className="confidence-note"><ShieldCheck size={15}/><span><b>Positive = raises P(convert)</b><br/>Negative = lowers P(convert)</span></div>
+            <div className="confidence-note"><ShieldCheck size={15}/><span><b>How to read this:</b> each bar shows how much a factor pushes conversion probability up (green) or down (red). Longer bar = bigger impact.</span></div>
           </section>
         </div>
         <div className="bottom-grid">
           <section className="panel inventory-panel"><div className="panel-head"><div><div className="panel-title">Flight inventory</div><div className="panel-caption">{selected ? `${route(selected.ond)} · ${fmtDate(selected.departure_dt)} · ${selected.flight_number}` : '—'}</div></div></div><div className="inventory-stats"><div><span>Seats available</span><b>{detail?.seats_available ?? '—'}</b></div><div><span>Load factor</span><b>{detail?.load_factor != null ? `${Math.round(detail.load_factor * 100)}%` : '—'}</b></div><div><span>Departure</span><b>{fmtTime(selected?.departure_dt ?? null)} <small>{left != null ? `· ${left}d` : ''}</small></b></div><div><span>Reference fare</span><b>{aed(refFare)}</b></div></div>
             {detail?.load_factor != null && <div className="capacity-bar"><span style={{ width: `${Math.round(detail.load_factor * 100)}%` }}/></div>}
             <div className="classes"><span>Agent</span><b>{detail?.agent_code ?? '—'}</b><b>conv. <i>{detail ? pct(detail.agent_conv_rate) : '—'}</i></b><b>route conv. <i>{detail ? pct(detail.route_conv_rate) : '—'}</i></b></div></section>
-          <section className="panel trend-panel"><div className="panel-head"><div><div className="panel-title">Fare × seats heat map</div><div className="panel-caption">Expected contribution · deadline {heatDeadline} days</div></div><select aria-label="Heat map deadline" className="subtle-button" value={heatDeadline} onChange={(e) => setHeatDeadline(Number(e.target.value))}>{DEADLINES.map((d) => <option key={d} value={d}>{d} days</option>)}</select></div>
-            {heat.length ? <div role="img" aria-label="Expected contribution by fare and seats" style={{ display: 'grid', gridTemplateColumns: `auto repeat(${heatFares.length}, 1fr)`, gap: 2, fontSize: 12 }}>
-              {heatSeats.map((s) => <HeatRow key={s} seats={s} fares={heatFares} heat={heat} color={heatColor}/>)}
-              <span/>{heatFares.map((f, i) => <span key={f} style={{ textAlign: 'center', fontSize: 11 }}>{i % 2 === 0 ? f : ''}</span>)}
-            </div> : <div className="empty-state">{scoring ? 'Waiting for score…' : 'No data'}</div>}</section>
+          <section className="panel trend-panel"><div className="panel-head"><div><div className="panel-title">Fare × seats heat map</div><div className="panel-caption">Expected contribution — greener = more profitable · deadline {heatDeadline} days</div></div><select aria-label="Heat map deadline" className="subtle-button" value={heatDeadline} onChange={(e) => setHeatDeadline(Number(e.target.value))}>{DEADLINES.map((d) => <option key={d} value={d}>{d} days</option>)}</select></div>
+            {heat.length ? <>
+              <div className="heat-col-labels" style={{ gridTemplateColumns: `80px repeat(${heatFares.length}, 1fr)` }}>
+                <span className="heat-col-corner">Seats ↓ · Fare →</span>
+                {heatFares.map((f) => <span key={f} className="heat-col-header">
+                  <b>{Math.round(f / refFare * 100)}%</b>
+                  <small>{Math.round(f).toLocaleString()}</small>
+                </span>)}
+              </div>
+              <div className="heat-grid" style={{ gridTemplateColumns: `80px repeat(${heatFares.length}, 1fr)` }}>
+                {heatSeats.map((s) => <HeatRow key={s} seats={s} fares={heatFares} heat={heat} color={heatColor} bestFare={score?.best_fare ?? 0} bestSeats={score?.best_seats ?? 0} refFare={refFare}/>)}
+              </div>
+              <div className="heat-legend"><span className="heat-legend-label">Unprofitable</span><div className="heat-legend-bar"/><span className="heat-legend-label">Most profitable</span></div>
+              <div className="heat-axis-label">Fare as % of reference fare (ref = {aed(refFare)}/pax)</div>
+            </> : <div className="empty-state">{scoring ? 'Waiting for score…' : 'No data'}</div>}</section>
         </div>
+
+        {/* ── FARE COMPARISON CHART ─────────────────────────────────── */}
+        {score && <FareCompareChart quotedFare={detail?.quoted_fare_per_pax ?? selected?.quoted_fare_per_pax ?? 0} aiBestFare={score.best_fare} refFare={refFare} competitorFare={detail?.competitor_fare ?? selected?.competitor_fare ?? 0}/>}
         </>}
         </>}
 
         {/* ── ALL REQUESTS PAGE ─────────────────────────────────────── */}
-        {activePage === 'all-requests' && <section className="panel all-requests-panel" style={{margin:'0 0 24px'}}>
-          <div className="panel-head"><div><div className="panel-title">All requests <span className="count-badge">{allFiltered.length === allRequests.length ? allRequests.length : `${allFiltered.length} of ${allRequests.length}`}</span></div><div className="panel-caption">Complete history including closed and converted</div></div>{allReqState === 'error' && <button className="subtle-button" onClick={() => setAllReqState('idle')}>Retry</button>}{allReqState === 'ready' && <StatusFilter label="Filter all requests by status" value={allStatus} onChange={setAllStatus} total={allRequests.length} options={allStatuses.map((st) => ({ value: st, count: allStatusCounts[st] }))}/>}</div>
-          {allReqState === 'loading' && Array.from({ length: 8 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true"/>)}
-          {allReqState === 'ready' && <div className="all-requests-table"><table><thead><tr><th>Request ID</th><th>Group ID</th><th>Created</th><th>Status</th><th>Route</th><th>Group size</th><th>Converted</th></tr></thead><tbody>{allRows.map((r) => <tr key={r.request_id} className={selectedId === r.request_id ? 'selected-row' : ''} onClick={() => { setSelectedId(r.request_id); setActivePage('requests') }}><td><code>{r.request_id}</code></td><td><code>{r.group_request_id}</code></td><td>{fmtTs(r.created_on)}</td><td><StatusBadge status={r.status}/></td><td>{route(r.ond)}</td><td>{r.group_size}</td><td>{r.converted != null ? r.converted : '—'}</td></tr>)}</tbody></table></div>}
-          {allReqState === 'ready' && allRequests.length === 0 && <div className="empty-state">No requests found.</div>}
-          {allReqState === 'ready' && allRequests.length > 0 && allFiltered.length === 0 && <div className="empty-state">No requests with status {allStatus}. <button type="button" className="filter-clear" onClick={() => setAllStatus('')}>Clear filter</button></div>}
-          {allReqState === 'ready' && allFiltered.length > 0 && <nav className="pagination" aria-label="All requests pagination"><span className="page-info">{(allSafePage - 1) * allPageSize + 1}–{Math.min(allSafePage * allPageSize, allFiltered.length)} of {allFiltered.length}</span><div className="page-controls"><button type="button" className="page-btn" aria-label="Previous page" disabled={allSafePage === 1} onClick={() => setAllPage(allSafePage - 1)}>‹</button>{pageList(allSafePage, allTotalPages).map((n, i) => n === '…' ? <span key={`e${i}`} className="page-gap">…</span> : <button type="button" key={n} className={`page-btn ${n === allSafePage ? 'current' : ''}`} aria-current={n === allSafePage ? 'page' : undefined} aria-label={`Page ${n}`} onClick={() => setAllPage(n)}>{n}</button>)}<button type="button" className="page-btn" aria-label="Next page" disabled={allSafePage === allTotalPages} onClick={() => setAllPage(allSafePage + 1)}>›</button></div><label className="page-size">Rows<select aria-label="Rows per page" value={allPageSize} onChange={(e) => setAllPageSize(Number(e.target.value))}>{PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}</select></label></nav>}
+        {activePage === 'all-requests' && <>
+        <section className="panel queue-panel" style={{margin:'0 0 14px'}}>
+          <div className="panel-head">
+            <div><div className="panel-title">All requests <span className="count-badge">{allFiltered.length === allRequests.length ? allRequests.length : `${allFiltered.length} of ${allRequests.length}`}</span></div><div className="panel-caption">Complete history including closed and converted</div></div>
+            <div style={{display:'flex',gap:7,alignItems:'center'}}>
+              {allReqState === 'error' && <button className="subtle-button" onClick={() => setAllReqState('idle')}>Retry</button>}
+              <button type="button" className={`subtle-button filter-toggle ${allStatusFilter.length ? 'active' : ''}`} aria-expanded={allFilterOpen} onClick={() => setAllFilterOpen((o) => !o)}><Filter size={13}/> Filter{allStatusFilter.length > 0 && <span className="filter-badge">{allStatusFilter.length}</span>}</button>
+              {hasAllFilters && <button type="button" className="filter-clear" onClick={clearAllFilters}>Clear</button>}
+            </div>
+          </div>
+          {(allFilterOpen || allStatusFilter.length > 0) && <div className="filter-bar" role="group" aria-label="Filter by status">
+            <span className="filter-label">STATUS</span>
+            {allStatuses.map((st) => <button type="button" key={st} className={`filter-chip ${allStatusFilter.includes(st) ? 'on' : ''}`} aria-pressed={allStatusFilter.includes(st)} onClick={() => toggleAllStatus(st)}>{st} <i>{allStatusCounts[st]}</i></button>)}
+            {allStatusFilter.length > 0 && <button type="button" className="filter-clear" onClick={() => setAllStatusFilter([])}>Clear</button>}
+          </div>}
+          <label className="search-box"><Search size={13}/><input aria-label="Search all requests" placeholder="Search by route, request ID or group ID…" value={allQuery} onChange={(e) => setAllQuery(e.target.value)}/></label>
+          <div className="request-list">
+            {allReqState === 'loading' && Array.from({ length: 8 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true"/>)}
+            {allPageRows.map((r) => (
+              <button key={r.request_id} className={`request-row ${selectedAllId === r.request_id ? 'selected' : ''}`} onClick={() => setSelectedAllId((id) => id === r.request_id ? null : r.request_id)}>
+                <span className="request-avatar">{initials(r.ond)}</span>
+                <span className="request-main">
+                  <span className="request-route">{route(r.ond)}<span className="request-id">{r.request_id}</span></span>
+                  <span className="request-meta">{r.group_size} pax · Created {fmtTs(r.created_on)}</span>
+                </span>
+                <span className="request-side">
+                  <span className={`status ${r.status.toLowerCase()}`}>{r.status}</span>
+                  {r.converted != null && <span className="request-date">{r.converted ? '✓ Converted' : '✗ Not converted'}</span>}
+                </span>
+              </button>
+            ))}
+            {allReqState === 'ready' && allFiltered.length === 0 && <div className="empty-state">No requests match{allStatusFilter.length ? ` ${allStatusFilter.join(' / ')}` : ''}{allQuery ? ` "${allQuery}"` : ''}. <button type="button" className="filter-clear" onClick={clearAllFilters}>Clear filters</button></div>}
+          </div>
+          {allFiltered.length > 0 && <nav className="pagination" aria-label="All requests pagination"><span className="page-info">{(allSafePage - 1) * allPageSize + 1}–{Math.min(allSafePage * allPageSize, allFiltered.length)} of {allFiltered.length}</span><div className="page-controls"><button type="button" className="page-btn" aria-label="Previous page" disabled={allSafePage === 1} onClick={() => setAllPage(allSafePage - 1)}>&#8249;</button>{pageList(allSafePage, allTotalPages).map((n, i) => n === '…' ? <span key={`e${i}`} className="page-gap">…</span> : <button type="button" key={n} className={`page-btn ${n === allSafePage ? 'current' : ''}`} aria-current={n === allSafePage ? 'page' : undefined} onClick={() => setAllPage(n as number)}>{n}</button>)}<button type="button" className="page-btn" aria-label="Next page" disabled={allSafePage === allTotalPages} onClick={() => setAllPage(allSafePage + 1)}>&#8250;</button></div><label className="page-size">Rows<select aria-label="Rows per page" value={allPageSize} onChange={(e) => setAllPageSize(Number(e.target.value))}>{PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}</select></label></nav>}
+        </section>
+
+        {/* Detail card — shown when a row is clicked */}
+        {selectedAllId && <section className="panel" style={{margin:'0 0 14px'}}>
+          <div className="panel-head">
+            <div><div className="panel-title">Request details <span className="request-id" style={{marginLeft:8}}>{selectedAllId}</span></div><div className="panel-caption">{allDetail ? `${route(allDetail.ond)} · ${allDetail.agent_code}` : '—'}</div></div>
+            <div style={{display:'flex',gap:8,alignItems:'center'}}>
+              {allDetail && <span className={`status ${allDetail.status.toLowerCase()}`}>{allDetail.status}</span>}
+              <button type="button" className="subtle-button" onClick={() => setSelectedAllId(null)}><X size={13}/></button>
+            </div>
+          </div>
+          {allDetailLoading && <div className="empty-state">Loading…</div>}
+          {allDetail && <div className="inventory-stats" style={{flexWrap:'wrap',gap:12}}>
+            <div><span>Route</span><b>{route(allDetail.ond)}</b></div>
+            <div><span>Flight</span><b>{allDetail.flight_number ?? '—'}</b></div>
+            <div><span>Departure</span><b>{fmtDate(allDetail.departure_dt)}</b></div>
+            <div><span>Created</span><b>{fmtTs(allDetail.created_on)}</b></div>
+            <div><span>Group size</span><b>{allDetail.group_size ?? '—'} pax</b></div>
+            <div><span>Trip type</span><b>{allDetail.trip_type}</b></div>
+            <div><span>Agent</span><b>{allDetail.agent_code}</b></div>
+            <div><span>Agent email</span><b>{allDetail.agent_email ?? '—'}</b></div>
+            <div><span>Quoted fare/pax</span><b>{aed(allDetail.quoted_fare_per_pax)}</b></div>
+            <div><span>Reference fare</span><b>{aed(allDetail.ref_fare)}</b></div>
+            <div><span>Fare ratio</span><b>{allDetail.fare_ratio != null ? `${(allDetail.fare_ratio * 100).toFixed(1)}%` : '—'}</b></div>
+            <div><span>Load factor</span><b>{allDetail.load_factor != null ? `${Math.round(allDetail.load_factor * 100)}%` : '—'}</b></div>
+            <div><span>Seats available</span><b>{allDetail.seats_available ?? '—'}</b></div>
+            <div><span>Lead time</span><b>{allDetail.lead_time != null ? `${Math.round(allDetail.lead_time)}d` : '—'}</b></div>
+            <div><span>Agent conv. rate</span><b>{pct(allDetail.agent_conv_rate)}</b></div>
+            <div><span>Route conv. rate</span><b>{pct(allDetail.route_conv_rate)}</b></div>
+            <div><span>Converted</span><b>{allDetail.converted != null ? (allDetail.converted ? 'Yes' : 'No') : '—'}</b></div>
+          </div>}
         </section>}
+        </>}
 
         {/* ── DECISION LOG PAGE ─────────────────────────────────────── */}
         {activePage === 'audit' && <section className="panel audit-panel"><div className="panel-head"><div><div className="panel-title">Decision log</div><div className="panel-caption">Human approvals and rejections recorded by the API</div></div><ShieldCheck size={16} color="#ff0041"/></div>{audit.length ? <div className="audit-list">{audit.slice(0, 50).map((e, i) => <div className="audit-entry" key={`${e.timestamp}-${i}`}><span className="audit-dot"/><span>{fmtTs(e.timestamp)} · {e.action} · {e.request_id}{e.fare != null ? ` · ${e.seats ?? '?'} seats at ${aed(e.fare)}` : ''}{e.note ? ` · ${e.note}` : ''}</span></div>)}</div> : <div className="audit-empty">No decisions recorded yet. Approve or reject a recommendation to create an audit entry.</div>}</section>}
@@ -471,102 +717,188 @@ export function GroupBookingDashboard() {
         <footer className="footer"><span>AI recommendations support decisions — all offers require human approval.</span></footer>
       </div>
     </section>
-    <aside className={`agent-panel ${panelOpen ? '' : 'panel-collapsed'}`}>
-      <button type="button" className="panel-toggle-btn" aria-label={panelOpen ? 'Collapse assistant' : 'Expand assistant'} onClick={() => setPanelOpen((o) => !o)}>{panelOpen ? <ChevronRight size={16}/> : <ChevronLeft size={16}/>}</button>
+    <aside className={`agent-panel ${panelOpen ? '' : 'panel-collapsed'}`} style={{ width: panelOpen ? agentWidth : 40 }}>
+      <div className="agent-drag-handle" onMouseDown={onAgentDragStart} title="Drag to resize"/>
+      <button type="button" className="panel-toggle-btn" aria-label={panelOpen ? 'Collapse assistant' : 'Expand assistant'} onClick={() => { const open = !panelOpen; setPanelOpen(open); if (open && agentWidth < 160) setAgentWidth(300) }}>{panelOpen ? <ChevronRight size={16}/> : <ChevronLeft size={16}/>}</button>
       {panelOpen && <>
-      <div className="agent-head">
-        <div className="agent-icon"><Bot size={22}/></div>
-        <div className="agent-title"><b>AI Booking Assistant</b><span>Explains · Simulates · Drafts</span></div>
-        <span className="agent-online"><i className="live-dot"/> Online</span>
-        <div className="agent-context"><span className="agent-context-label">Discussing</span><b>{selected ? `${selected.request_id} · ${route(selected.ond)}` : 'No request selected'}</b>{selected && <span>{pax} pax · {fmtDate(selected.departure_dt)}</span>}</div>
+      {/* Header */}
+      <div className="agent-head-new">
+        <div className="agent-head-left"><div className="agent-icon-new"><Bot size={16}/></div><div><b>AI Assistant</b><span><i className="live-dot"/> Powered by Claude</span></div></div>
+        {isRequestContext && score && <div className={`agent-rec-chip rec-${score.recommendation.toLowerCase()}`}>{score.recommendation}</div>}
       </div>
-      <div className="agent-body" ref={bodyRef}>
-        {thread.length === 0 && !typing && <div className="agent-hero">
-          <div className="agent-hero-icon"><Sparkles size={26}/></div>
-          <h3>How can I help with {selected ? selected.request_id : 'this request'}?</h3>
-          <p>I use the model's scores and scenarios, so every number is traceable.</p>
-          <div className="agent-cards">
-            <button type="button" className="agent-card" disabled={chatBusy || !selectedId} onClick={() => ask('Why this recommendation?')}><span className="agent-card-icon"><Sparkles size={16}/></span><span><b>Why this recommendation?</b><small>Plain-language reasoning behind the decision</small></span></button>
-            <button type="button" className="agent-card" disabled={chatBusy || !selectedId} onClick={() => ask('What if we raise the fare by 5%?')}><span className="agent-card-icon"><Activity size={16}/></span><span><b>What if we raise the fare?</b><small>Simulate a +5% fare and compare outcomes</small></span></button>
-            <button type="button" className="agent-card" disabled={chatBusy || !selectedId} onClick={draftCounteroffer}><span className="agent-card-icon"><FileText size={16}/></span><span><b>Draft a counteroffer</b><small>Generate an email for the travel agent</small></span></button>
-          </div>
-        </div>}
-        <div className="thread" aria-live="polite">
-          {thread.map((m, i) => m.role === 'user'
-            ? <div key={i} className="msg user"><div className="bubble">{m.text}</div></div>
-            : <div key={i} className="msg assistant"><span className="msg-avatar"><Bot size={15}/></span><div className="bubble"><article className="md"><ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown></article></div></div>)}
-          {typing && <div className="msg assistant"><span className="msg-avatar"><Bot size={15}/></span><div className="bubble typing" aria-label="Assistant is thinking"><i/><i/><i/></div></div>}
+
+      {/* Request context card — only on requests page */}
+      {isRequestContext && selected && <div className="agent-context-card">
+        <div className="agent-context-route">{route(selected.ond)}<span className="agent-context-id">{selected.request_id}</span></div>
+        <div className="agent-context-stats">
+          <div><span>Group size</span><b>{pax} pax</b></div>
+          <div><span>P(convert)</span><b className={score ? pConvertClass(score.p_convert_at_best) + '-text' : ''}>{score ? pct(score.p_convert_at_best) : '—'}</b></div>
+          <div><span>Departure</span><b>{left != null ? `${left}d` : '—'}</b></div>
+          <div><span>Load factor</span><b>{detail?.load_factor != null ? `${Math.round(detail.load_factor * 100)}%` : '—'}</b></div>
         </div>
-        {counterofferDraft && <section ref={draftRef} className="counteroffer-card" aria-label="Counteroffer draft"><div className="counteroffer-card-head"><div><b>Counteroffer email</b><span>{emailSent ? 'SENT' : 'DRAFT · NOT SENT'}</span></div><FileText size={15}/></div><label className="sr-only" htmlFor="counteroffer-draft">Editable counteroffer message</label><textarea id="counteroffer-draft" value={counterofferDraft} onChange={(event) => { setCounterofferDraft(event.target.value); setEmailSent(false) }}/><div className="counteroffer-actions"><button type="button" className="copy-draft-button" onClick={copyCounteroffer}><Copy size={13}/> Copy</button><div className="send-email-row"><input className="email-input" type="email" placeholder="Recipient email…" value={recipientEmail} onChange={(e) => { setRecipientEmail(e.target.value); setEmailSent(false) }} aria-label="Recipient email address"/><button type="button" className={`send-email-button ${emailSent ? 'is-sent' : ''}`} onClick={sendEmail} disabled={emailSending || !recipientEmail || emailSent}>{emailSent ? <><Check size={13}/> Sent</> : emailSending ? 'Sending…' : <><Send size={13}/> Send</>}</button></div></div>{detail?.agent_email && <p className="counteroffer-note agent-email-note"><Check size={10}/> Recipient pre-filled from agent profile ({detail.agent_email})</p>}<p className="counteroffer-note">Review and edit before sending. All sends are logged to the audit trail.</p></section>}
+      </div>}
+
+      <div className="agent-body-new">
+        {/* Chat thread or intro */}
+        {chatHistory && chatHistory.length > 0 ? (
+          <div className="chat-thread">
+            {chatHistory.map((msg, i) => {
+              const text = extractText(msg.content)
+              if (!text) return null
+              return (
+                <div key={i} className={`chat-msg chat-msg-${msg.role}`}>
+                  {msg.role === 'assistant' && <div className="chat-avatar-sm"><Sparkles size={10}/></div>}
+                  <div className="chat-bubble-content">
+                    <article className="md"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></article>
+                  </div>
+                </div>
+              )
+            })}
+            {chatBusy && <div className="chat-msg chat-msg-assistant"><div className="chat-avatar-sm"><Sparkles size={10}/></div><div className="chat-typing"><span/><span/><span/></div></div>}
+          </div>
+        ) : (
+          <>
+            <div className="agent-intro-new">
+              <div className="agent-spark-new"><Sparkles size={14}/></div>
+              <b>Decision copilot</b>
+              <p>{isRequestContext ? 'I analyse this request in real time. Ask me anything or pick a suggestion below.' : 'Ask me anything about group bookings, revenue management, or pricing strategy.'}</p>
+            </div>
+            {chatBusy && <div className="chat-msg chat-msg-assistant"><div className="chat-avatar-sm"><Sparkles size={10}/></div><div className="chat-typing"><span/><span/><span/></div></div>}
+          </>
+        )}
+
+        {/* Context-aware suggestions */}
+        {!chatBusy && <div className="suggestions-wrap">
+          <div className="suggestions-label">SUGGESTED</div>
+          {suggestions.map((s) => (
+            <button key={s.label} className="suggestion-new" onClick={s.action}><Sparkles size={9}/>{s.label}</button>
+          ))}
+        </div>}
+
+        {/* Counteroffer draft — only on requests page */}
+        {isRequestContext && counterofferDraft && <section ref={draftRef} className="counteroffer-card" aria-label="Counteroffer draft">
+          <div className="counteroffer-card-head"><div><b>Counteroffer email</b><span>{emailSent ? 'SENT' : 'DRAFT · NOT SENT'}</span></div><FileText size={15}/></div>
+          <label className="sr-only" htmlFor="counteroffer-draft">Editable counteroffer message</label>
+          <textarea id="counteroffer-draft" value={counterofferDraft} onChange={(event) => { setCounterofferDraft(event.target.value); setEmailSent(false) }}/>
+          <div className="counteroffer-actions">
+            <button type="button" className="copy-draft-button" onClick={copyCounteroffer}><Copy size={13}/> Copy</button>
+            <div className="send-email-row">
+              <input className="email-input" type="email" placeholder="Recipient email…" value={recipientEmail} onChange={(e) => { setRecipientEmail(e.target.value); setEmailSent(false) }} aria-label="Recipient email address"/>
+              <button type="button" className={`send-email-button ${emailSent ? 'is-sent' : ''}`} onClick={sendEmail} disabled={emailSending || !recipientEmail || emailSent}>{emailSent ? <><Check size={13}/> Sent</> : emailSending ? 'Sending…' : <><Send size={13}/> Send</>}</button>
+            </div>
+          </div>
+          {detail?.agent_email && <p className="counteroffer-note agent-email-note"><Check size={10}/> Recipient pre-filled from agent profile ({detail.agent_email})</p>}
+          <p className="counteroffer-note">Review and edit before sending. All sends are logged to the audit trail.</p>
+        </section>}
       </div>
-      {thread.length > 0 && <div className="quick-actions" role="group" aria-label="Suggested questions"><button type="button" disabled={chatBusy} onClick={() => ask('Why this recommendation?')}>Why this?</button><button type="button" disabled={chatBusy} onClick={() => ask('What if we raise the fare by 5%?')}>Raise fare 5%</button><button type="button" disabled={chatBusy} onClick={() => ask('What are the main risks?')}>Key risks</button><button type="button" disabled={chatBusy} onClick={draftCounteroffer}>Draft counteroffer</button></div>}
-      <form className="chat-compose" onSubmit={(e) => { e.preventDefault(); const m = chat; setChat(''); ask(m) }}><input aria-label="Ask the booking assistant" value={chat} onChange={(e) => setChat(e.target.value)} placeholder={selected ? `Ask about ${selected.request_id}…` : 'Select a request to start…'} disabled={!selectedId}/><button aria-label="Send message" type="submit" disabled={chatBusy || !chat.trim()}><Send size={17}/></button></form>
-      <div className="agent-disclaimer">AI responses are based on model scenarios, not live PSS updates.</div>
+
+      {/* Compose */}
+      <div className="agent-compose-wrap">
+        <form className="chat-compose-new" onSubmit={(e) => { e.preventDefault(); const m = chat; setChat(''); ask(m) }}>
+          <input aria-label="Ask the booking assistant" value={chat} onChange={(e) => setChat(e.target.value)} placeholder={isRequestContext ? `Ask about ${selectedId}…` : 'Ask anything…'} disabled={chatBusy}/>
+          <button aria-label="Send message" type="submit" disabled={chatBusy || !chat.trim()}><Send size={14}/></button>
+        </form>
+        <p className="agent-disclaimer">AI responses are based on model scenarios, not live PSS data.</p>
+      </div>
       </>}
     </aside>
     {notice && <div className="toast" role="status"><Check size={15}/>{notice}</div>}
   </main>
 }
 
-function HeatRow({ seats, fares, heat, color }: { seats: number; fares: number[]; heat: { fare: number; seats: number; expected_contribution: number }[]; color: (v: number) => string }) {
+function FareCompareChart({ quotedFare, aiBestFare, refFare, competitorFare }: { quotedFare: number; aiBestFare: number; refFare: number; competitorFare: number }) {
+  const bars = [
+    { label: 'Agent quoted', value: quotedFare, color: '#e39c4e' },
+    { label: 'AI proposal', value: aiBestFare, color: '#00b26e' },
+    { label: 'Reference fare', value: refFare, color: '#6b8fa0' },
+    { label: 'Competitor', value: competitorFare, color: '#ff4466' },
+  ].filter((b) => b.value > 0)
+
+  if (bars.length < 2) return null
+
+  const W = 500, H = 130
+  const PAD = { l: 54, r: 12, t: 14, b: 32 }
+  const plotW = W - PAD.l - PAD.r
+  const plotH = H - PAD.t - PAD.b
+  const maxV = Math.max(...bars.map((b) => b.value)) * 1.18
+  const slotW = plotW / bars.length
+  const barW = Math.min(44, slotW * 0.55)
+  const y = (v: number) => PAD.t + plotH * (1 - v / maxV)
+  const ticks = [0.25, 0.5, 0.75, 1.0]
+
+  return (
+    <section className="panel fare-compare-panel">
+      <div className="panel-head">
+        <div>
+          <div className="panel-title">Fare comparison</div>
+          <div className="panel-caption">Agent quoted · AI proposal · Reference · Competitor — per pax (AED)</div>
+        </div>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} role="img" aria-label="Fare comparison bar chart">
+        {/* grid + y-axis ticks */}
+        {ticks.map((f) => {
+          const yy = y(maxV * f)
+          return <g key={f}>
+            <line x1={PAD.l} y1={yy} x2={W - PAD.r} y2={yy} stroke="#f0f0f0" strokeWidth="1"/>
+            <text x={PAD.l - 5} y={yy + 3} textAnchor="end" fontSize="7" fill="#c5c5c5">{Math.round(maxV * f / 100) * 100}</text>
+          </g>
+        })}
+        {/* x-axis baseline */}
+        <line x1={PAD.l} y1={H - PAD.b} x2={W - PAD.r} y2={H - PAD.b} stroke="#e7e7e7" strokeWidth="1"/>
+        {/* ref fare horizontal line */}
+        {refFare > 0 && (
+          <line x1={PAD.l} y1={y(refFare)} x2={W - PAD.r} y2={y(refFare)} stroke="#6b8fa0" strokeWidth="1" strokeDasharray="4 3" opacity="0.6"/>
+        )}
+        {/* bars */}
+        {bars.map((b, i) => {
+          const cx = PAD.l + slotW * i + slotW / 2
+          const barY = y(b.value)
+          const barH = H - PAD.b - barY
+          return (
+            <g key={b.label}>
+              <rect x={cx - barW / 2} y={barY} width={barW} height={barH} rx="4" fill={b.color} opacity="0.85"/>
+              <text x={cx} y={barY - 4} textAnchor="middle" fontSize="8" fontWeight="700" fill={b.color}>{Math.round(b.value).toLocaleString()}</text>
+              <text x={cx} y={H - PAD.b + 13} textAnchor="middle" fontSize="7.5" fill="#6b777c">{b.label}</text>
+            </g>
+          )
+        })}
+      </svg>
+    </section>
+  )
+}
+
+function extractText(content: string | unknown): string {
+  if (typeof content === 'string') return content.trim()
+  if (Array.isArray(content)) {
+    return (content as Array<{type: string; text?: string}>)
+      .filter((b) => b.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text as string)
+      .join('\n')
+      .trim()
+  }
+  return ''
+}
+
+function HeatRow({ seats, fares, heat, color, bestFare, bestSeats, refFare }: { seats: number; fares: number[]; heat: { fare: number; seats: number; expected_contribution: number }[]; color: (v: number) => string; bestFare: number; bestSeats: number; refFare: number }) {
   return <>
-    <span style={{ paddingRight: 4, alignSelf: 'center' }}>{seats}</span>
-    {fares.map((f) => { const c = heat.find((h) => h.fare === f && h.seats === seats); return <span key={f} title={c ? `${f} AED × ${seats} seats → AED ${Math.round(c.expected_contribution).toLocaleString()}` : ''} style={{ height: 22, borderRadius: 3, background: c ? color(c.expected_contribution) : 'transparent' }}/> })}
+    <span className="heat-row-label"><b>{seats}</b><small> seats</small></span>
+    {fares.map((f) => {
+      const c = heat.find((h) => Math.round(h.fare) === Math.round(f) && h.seats === seats)
+      const isBest = c && Math.round(f) === Math.round(bestFare) && seats === bestSeats
+      const val = c ? c.expected_contribution : null
+      const disp = val == null ? '' : val < 0 ? '—' : val < 100 ? '~0' : val >= 1000 ? `${(val / 1000).toFixed(1)}k` : String(Math.round(val))
+      const textColor = val == null ? '' : val < 0 ? '#cc3300' : val < 100 ? '#9baab0' : '#1a4a2e'
+      return <span key={f} className={`heat-cell${isBest ? ' heat-best' : ''}`}
+        title={c ? `${seats} seats at AED ${Math.round(f).toLocaleString()}/pax (${Math.round(f/refFare*100)}% of ref) → expected contribution AED ${Math.round(c.expected_contribution).toLocaleString()}` : ''}
+        style={{ background: c ? color(c.expected_contribution) : '#f7f7f7', color: textColor }}>
+        {isBest ? '★' : disp}
+      </span>
+    })}
   </>
 }
+function Metric({label,value,change,icon,tone,positive}:{label:string;value:string;change:string;icon:React.ReactNode;tone:string;positive?:boolean}) { return <div className="metric-card"><div className={`metric-icon ${tone}`}>{icon}</div><span className="metric-label">{label}</span><strong>{value}</strong><span className={`metric-change ${positive?'up':''}`}>{positive && <ArrowUpRight size={13}/>} {change}</span></div> }
 function Offer({label,value,suffix,highlight}:{label:string;value:string;suffix:string;highlight?:boolean}) {return <div className={`offer ${highlight?'highlight':''}`}><span>{label}</span><b>{value}</b><small>{suffix}</small></div>}
 function Driver({label,detail,value,positive,negative,width}:{label:string;detail:string;value:string;positive?:boolean;negative?:boolean;width:string}) {return <div className="driver"><div className="driver-head"><span><b>{label}</b><small>{detail}</small></span><em className={positive?'driver-positive':negative?'driver-negative':''}>{value}</em></div><div className="driver-track"><i className={positive?'driver-fill-positive':negative?'driver-fill-negative':''} style={{width}}/></div></div>}
-
-const statusSlug = (st: string) => st.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-
-function StatusBadge({ status }: { status: string }) {
-  return <span className={`status ${statusSlug(status)}`}><i className="status-dot" aria-hidden="true"/>{status}</span>
-}
-
-function StatusFilter({ label, value, onChange, total, options }: { label: string; value: string; onChange: (v: string) => void; total: number; options: { value: string; count: number }[] }) {
-  const [open, setOpen] = useState(false)
-  const [active, setActive] = useState(0)
-  const wrap = useRef<HTMLDivElement>(null)
-  const btn = useRef<HTMLButtonElement>(null)
-  const items = [{ value: '', count: total }, ...options]
-  const current = items.find((o) => o.value === value) ?? items[0]
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: PointerEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false) }
-    document.addEventListener('pointerdown', onDown)
-    return () => document.removeEventListener('pointerdown', onDown)
-  }, [open])
-
-  function choose(v: string) { onChange(v); setOpen(false); btn.current?.focus() }
-  function onKey(e: React.KeyboardEvent) {
-    if (!open) { if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setActive(Math.max(0, items.findIndex((o) => o.value === value))); setOpen(true) } return }
-    if (e.key === 'Escape') { e.preventDefault(); setOpen(false); btn.current?.focus() }
-    else if (e.key === 'ArrowDown') { e.preventDefault(); setActive((i) => Math.min(items.length - 1, i + 1)) }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((i) => Math.max(0, i - 1)) }
-    else if (e.key === 'Home') { e.preventDefault(); setActive(0) }
-    else if (e.key === 'End') { e.preventDefault(); setActive(items.length - 1) }
-    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); choose(items[active].value) }
-    else if (e.key === 'Tab') setOpen(false)
-  }
-
-  return <div className="sf" ref={wrap} onKeyDown={onKey}>
-    <button ref={btn} type="button" className={`sf-trigger ${value ? 'active' : ''}`} aria-label={label} aria-haspopup="listbox" aria-expanded={open} onClick={() => { setActive(Math.max(0, items.findIndex((o) => o.value === value))); setOpen((o) => !o) }}>
-      {value ? <i className={`status-dot ${statusSlug(value)}`} aria-hidden="true"/> : <ListFilter size={14} aria-hidden="true"/>}
-      <span className="sf-label">{value || 'All statuses'}</span>
-      <span className="sf-count">{current.count}</span>
-      <ChevronDown size={14} className="sf-chevron" aria-hidden="true"/>
-    </button>
-    {open && <ul className="sf-menu" role="listbox" aria-label={label}>
-      {items.map((o, i) => <li key={o.value || 'all'} role="option" aria-selected={o.value === value} className={`sf-option ${i === active ? 'focus' : ''} ${o.value === value ? 'selected' : ''}`} onMouseEnter={() => setActive(i)} onClick={() => choose(o.value)}>
-        {o.value ? <i className={`status-dot ${statusSlug(o.value)}`} aria-hidden="true"/> : <i className="status-dot all" aria-hidden="true"/>}
-        <span className="sf-opt-label">{o.value || 'All statuses'}</span>
-        <span className="sf-opt-count">{o.count}</span>
-        {o.value === value && <Check size={14} className="sf-check" aria-hidden="true"/>}
-      </li>)}
-    </ul>}
-  </div>
-}
 function DetailField({ label, value }: { label: string; value: string }) { return <div className="detail-field"><span>{label}</span><b>{value}</b></div> }
 
 /* ── Overview: executive summary ────────────────────────────────────────────── */

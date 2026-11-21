@@ -13,6 +13,7 @@ export interface RequestSummary {
   ref_fare: number
   flight_number: string
   departure_dt: string | null
+  competitor_fare?: number | null
 }
 export interface RequestListResponse { requests: RequestSummary[]; total: number }
 export interface RequestAllSummary { request_id: string; group_request_id: string; created_on: string; status: string; ond: string; group_size: number; converted: number | null }
