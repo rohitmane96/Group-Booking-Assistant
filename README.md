@@ -1,7 +1,9 @@
 # UC02 · Intelligent Group Booking Assistant
-**ISA Hackathon · Team 10 · 20 Nov 2026**
+**ISA Hackathon · Team 10 · November 2026**
 
 AI-powered pipeline that evaluates group booking requests for Air Arabia and recommends Accept / Counteroffer / Partial / Reject decisions. A human approves every decision — no PSS writes.
+
+**Live:** http://130.61.32.35:8080  |  **API docs:** http://130.61.32.35:8888/docs
 
 ---
 
@@ -17,10 +19,10 @@ New Request → Data & Feature Layer → [Conversion Model + Fare Curve + Displa
 | Data store  | DuckDB + Pandas + Parquet cache        |
 | ML model    | LightGBM + isotonic calibration + SHAP |
 | Optimizer   | NumPy grid search (150 scenarios)      |
-| API         | FastAPI                                |
+| API         | FastAPI (port 8888)                    |
 | LLM         | Claude (claude-sonnet-4-6)             |
-| UI          | Streamlit + Plotly                     |
-| Deploy      | Docker Compose (restart: always)       |
+| UI          | Next.js 16 (served by FastAPI, port 8080) |
+| Deploy      | Docker Compose on Oracle Cloud VM      |
 
 ---
 
@@ -50,68 +52,56 @@ uc02-group-assistant/
 │   ├── fare_curve.py       # fare-response curve (70–120% of ref fare)
 │   ├── displacement.py     # pickup curves + EMSR displacement cost
 │   ├── optimizer.py        # grid search: fare × seats × deadline
-│   └── baseline.py         # rule-based baseline for comparison
+│   ├── baseline.py         # rule-based baseline for comparison
+│   ├── comparison.py       # AI vs baseline like-for-like evaluation
+│   └── opportunities.py    # revenue opportunity prioritisation
 ├── agent/
 │   ├── tools.py            # LLM tool functions (get_request, score, etc.)
 │   ├── prompts.py          # system prompt + templates
 │   └── counteroffer.py     # agentic loop (Claude tool_use)
 ├── api/
-│   └── main.py             # FastAPI (REST endpoints)
-├── ui/
-│   └── app.py              # Streamlit dashboard
+│   └── main.py             # FastAPI (REST endpoints + static UI serving)
+├── frontend/               # Next.js 16 dashboard
+│   ├── app/
+│   ├── components/
+│   │   └── group-booking-dashboard.tsx  # main single-page dashboard
+│   └── lib/api.ts          # typed API client
 ├── config/
 │   └── policy.yaml         # fare floors, deadlines, attrition, etc.
-├── eval/                   # (pending) backtest notebook
+├── nginx/
+│   └── nginx.conf          # reverse proxy (port 8080 → 8888)
 ├── Dockerfile
 ├── docker-compose.yml
-├── startup.sh              # local quick-start
 └── requirements.txt
 ```
-
----
-
-## Quick Start (Local)
-
-```bash
-cd uc02-group-assistant
-
-# 1. Set your Anthropic API key
-cp .env.example .env
-# edit .env → ANTHROPIC_API_KEY=sk-ant-...
-
-# 2. Run everything
-./startup.sh
-```
-
-- Dashboard: http://localhost:8501
-- API docs: http://localhost:8000/docs
 
 ---
 
 ## Quick Start (Docker)
 
 ```bash
-# 1. Set API key in .env
-echo "ANTHROPIC_API_KEY=sk-ant-..." >> .env
+# 1. Set API key
+echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
 
 # 2. Build and start
-docker compose up --build
+docker compose up --build -d
 
-# Services restart automatically on VM reboot (restart: always)
+# Dashboard: http://localhost:8080
+# API docs:  http://localhost:8888/docs
 ```
 
 ---
 
-## Demo Script (5 min)
+## Dashboard Pages
 
-1. Open http://localhost:8501
-2. Select an open SHJ request from the sidebar
-3. See P(convert), SHAP drivers, and recommendation card
-4. Slide fare in "Run Scenario" → watch P(convert) and contribution change
-5. View fare × seats heat map
-6. Ask what-if in Chat: "What if we offer 30 seats at AED 1,500?"
-7. Click "Draft Counteroffer" → review email
-8. Click "Approve Recommendation" → see audit log entry
+| Page             | Description                                                   |
+|------------------|---------------------------------------------------------------|
+| **Overview**     | Executive KPI summary (open requests, AI vs baseline contribution, improvement %) · Revenue Opportunities list (filterable by urgency/category) · AI vs Traditional strategy comparison |
+| **Open Requests**| Filterable queue of active requests · Collapse/expand detail view · AI scoring (P(convert), SHAP drivers, fare curve, heat map) · What-if scenario tool · Counteroffer email drafting · Human approve/edit/reject |
+| **All Requests** | Full history (all statuses) with same search/filter/pagination as open requests · Read-only detail card |
+| **Audit Log**    | Timeline of all human decisions (approve / edit / reject)     |
+
+**AI Assistant (right panel)** — Claude-powered chat answers what-if questions using live tools. Automatically explains each AI recommendation in plain English when a request is selected.
 
 ---
 
@@ -127,7 +117,6 @@ docker compose up --build
 ### 2. Fare-Response Curve
 - Scores request at 11 fare points (70%–120% of reference fare, 5% steps)
 - Monotone constraint: P(convert) always decreases as fare rises
-- Falls back to elasticity simulation if model lacks fare variation
 
 ### 3. Displacement Engine
 - Builds pickup curves from monthly booking data
@@ -139,62 +128,22 @@ docker compose up --build
 - Objective: `P(f) × (k × attrition × f − displacement(k)) − (1−P(f)) × holding(k)`
 - Decision: Accept / Counteroffer / Partial / Reject
 
-### 5. LLM Agent (Claude)
+### 5. Baseline (Rule-Based)
+- Quotes at 90% of reference fare; accepts if load factor < 75%
+- Used as a like-for-like benchmark against the AI optimizer
+
+### 6. Strategy Comparison (engines/comparison.py)
+- Evaluates AI and baseline on identical assumptions for every pending request
+- Powers the "AI vs Traditional" panel on the Overview page
+
+### 7. Revenue Opportunities (engines/opportunities.py)
+- Ranks pending requests by urgency (critical <7d, soon <14d), inventory risk, and expected contribution
+- Powers the "Revenue Opportunities" list on the Overview page
+
+### 8. LLM Agent (Claude)
 - Tools: get_request, score_request, run_scenario, get_drivers, draft_counteroffer
 - Chat: what-if questions run live tools
-- Counteroffer email drafted in airline tone
-
----
-
-## Policy Configuration
-
-Edit `config/policy.yaml` to adjust:
-- `fare_floor_pct`, `fare_ceiling_pct` — fare grid bounds
-- `attrition` — expected no-show rate (default 0.9)
-- `option_deadlines_days` — deadline options to evaluate
-- `max_group_share_of_capacity` — max seats per group
-- `baseline_fare_pct_of_reference` — rule-based benchmark
-
----
-
-## Implementation Status
-
-### ✅ Done (MVP)
-- [x] ETL pipeline: Group Quote, Flight Inventory, fares_list, booking data
-- [x] Feature engineering (quote-time snapshot, no leakage)
-- [x] LightGBM conversion model with SHAP + isotonic calibration
-- [x] Fare-response curve engine (monotone)
-- [x] Displacement engine with pickup curves
-- [x] Constrained optimizer (grid search)
-- [x] Rule-based baseline
-- [x] FastAPI backend (all endpoints)
-- [x] Streamlit UI with charts, what-if, approval
-- [x] Claude agent (tool_use loop)
-- [x] Counteroffer email drafting
-- [x] Audit log
-- [x] Docker Compose with `restart: always`
-- [x] policy.yaml for configurable business rules
-
-### 🔄 Pending / Next Iteration
-- [ ] **Backtest notebook** (`eval/backtest.ipynb`) — ROC-AUC, PR-AUC, Brier score vs baseline
-- [ ] **Model calibration reliability plot** — visualise calibration in UI
-- [ ] **New request form** — UI form to submit a new group request (currently uses existing data)
-- [ ] **Flight inventory view tab** — show booking class ladder in UI
-- [ ] **SHAP confidence band** — flag OOD requests (outside training distribution)
-- [ ] **Synthetic agent history** — extend 4-agent dataset via simulation
-- [ ] **Multi-leg trip support** — OND 2–5 not yet fully used in features
-- [ ] **Fares with totals cleaning** — cap/drop ambiguous fares (likely group totals > AED 10k)
-- [ ] **Authentication** — API key / SSO for the dashboard
-- [ ] **VM deployment** — configure nginx reverse proxy, SSL, systemd or Docker on reboot
-- [ ] **Email integration** — send counteroffer email via SMTP
-- [ ] **Metrics slide** — automated model performance report
-
-### ⚠️ Known Assumptions / Limitations
-- Fare-response curve partly simulation-based (documented in UI)
-- Only 4 agents: synthetic history labelled clearly
-- No PSS integration: recommendations wait for human approval
-- Competitor fares mostly 0 → feature excluded from model
-- Final pax count not in data → attrition is configurable (default 0.9)
+- Auto-explanation: fires when a request is selected with no active chat history
 
 ---
 
@@ -204,32 +153,78 @@ Edit `config/policy.yaml` to adjust:
 |--------|----------------------------------|---------------------------------|
 | GET    | `/health`                        | Health check                    |
 | GET    | `/requests`                      | List open requests               |
-| GET    | `/requests/all`                  | List all requests                |
+| GET    | `/requests/all`                  | List all requests (all statuses) |
 | GET    | `/requests/{id}`                 | Get request + features           |
-| POST   | `/requests/{id}/score`           | Run all engines                  |
+| POST   | `/requests/{id}/score`           | Run all engines + comparison     |
 | POST   | `/requests/{id}/scenario`        | What-if scenario                 |
 | GET    | `/requests/{id}/drivers`         | SHAP drivers                     |
 | POST   | `/requests/{id}/counteroffer`    | Draft counteroffer email         |
+| POST   | `/requests/{id}/send-counteroffer` | Send counteroffer email        |
 | POST   | `/requests/{id}/approve`         | Record human decision            |
 | GET    | `/audit`                         | Audit log                        |
 | POST   | `/chat`                          | Agentic chat (Claude)            |
+| GET    | `/summary/executive`             | Executive KPI summary            |
+| GET    | `/summary/strategy-comparison`   | AI vs baseline comparison        |
+| GET    | `/summary/opportunities`         | Prioritised revenue opportunities|
 | POST   | `/admin/rebuild`                 | Rebuild DB + retrain model       |
 
 ---
 
-## VM Deployment Notes (TODO: add details when VM provided)
+## Policy Configuration
+
+Edit `config/policy.yaml` to adjust:
+- `fare_floor_pct`, `fare_ceiling_pct` — fare grid bounds (default 70%–120%)
+- `attrition` — expected no-show rate (default 0.9)
+- `option_deadlines_days` — deadline options to evaluate (default [3, 7, 14])
+- `max_group_share_of_capacity` — max seats per group (default 40%)
+- `baseline_fare_pct_of_reference` — rule-based benchmark fare (default 90%)
+- `baseline_max_load_factor` — baseline load factor threshold (default 75%)
+
+---
+
+## Deployment (VM)
+
+- **VM:** Oracle Cloud · `opc@130.61.32.35`
+- **Dashboard:** http://130.61.32.35:8080
+- **API:** http://130.61.32.35:8888
 
 ```bash
-# On VM:
-git clone <repo> uc02-group-assistant
-cd uc02-group-assistant
-echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
+# Deploy changes (never overwrites .env on VM)
+rsync -az --exclude='.git' --exclude='node_modules' --exclude='.next' \
+      --exclude='data/' --exclude='.env' --exclude='__pycache__' \
+      ./ opc@130.61.32.35:~/uc02-group-assistant/ \
+      -e "ssh -i <key>"
 
-# Start (containers auto-restart on reboot)
-docker compose up -d --build
-
-# Check logs
-docker compose logs -f
+# Rebuild and restart (restart alone does NOT reload env_file)
+docker compose build --no-cache
+docker compose up -d --force-recreate api nginx
 ```
 
-Docker `restart: always` ensures services come back after VM reboot.
+Init container runs ETL + feature build + model training once on first start (skips if data already present).
+
+---
+
+## Implementation Status
+
+### ✅ Done
+- ETL pipeline: Group Quote, Flight Inventory, fares_list, booking data
+- Feature engineering (quote-time snapshot, no leakage)
+- LightGBM conversion model with SHAP + isotonic calibration
+- Fare-response curve engine (monotone)
+- Displacement engine with pickup curves
+- Constrained optimizer (grid search, 150 scenarios)
+- Rule-based baseline + strategy comparison engine
+- Revenue opportunities prioritisation engine
+- FastAPI backend (all endpoints including /summary/*)
+- Next.js 16 dashboard (Overview, Open Requests, All Requests, Audit Log)
+- Claude agent (tool_use loop) with auto-why explanation
+- Counteroffer email drafting
+- Audit log
+- Docker Compose on Oracle Cloud VM with nginx
+
+### ⚠️ Known Assumptions / Limitations
+- Fare-response curve partly simulation-based (documented in UI)
+- Only 4 agents with real history; synthetic requests labelled clearly
+- No PSS integration: recommendations wait for human approval
+- Competitor fares mostly 0 → feature excluded from model
+- Final pax count not in data → attrition is configurable (default 0.9)
