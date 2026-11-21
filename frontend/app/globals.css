@@ -120,3 +120,4 @@ button { color: inherit; }
 .send-email-button{display:inline-flex;align-items:center;gap:5px;border:0;border-radius:5px;padding:6px 9px;background:#39454b;color:#fff;font-size:8px;font-weight:650;cursor:pointer;white-space:nowrap}.send-email-button:hover:not(:disabled){background:#ff0041}.send-email-button:disabled{opacity:.55;cursor:default}.send-email-button.is-sent{background:#00b26e}
 .counteroffer-note{margin:7px 0 0;color:#c5c5c5;font-size:7px;line-height:1.4}
 .agent-email-note{color:#00b26e;display:flex;align-items:center;gap:4px}
+.draft-button{border-color:#f0d9b8;color:#a17f50}.draft-button:hover{border-color:#d9892b;color:#d9892b;background:#fdf6ee}
