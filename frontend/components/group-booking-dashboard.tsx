@@ -1,13 +1,13 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowUpRight, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy, FileText, Filter, History, LayoutDashboard, List, Plane, Search, Send, ShieldCheck, Sparkles, X } from 'lucide-react'
+import { Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy, FileText, Filter, History, List, Plane, Search, Send, ShieldCheck, Sparkles, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { api, ApiError, type ApprovalRequest, type AuditEntry, type ChatMessage, type RequestAllSummary, type RequestDetail, type RequestSummary, type ScenarioResponse, type ScoreResponse, type SendCounterOfferRequest } from '@/lib/api'
 
-type Page = 'overview' | 'requests' | 'all-requests' | 'audit'
-const PAGE_LABELS: Record<Page, string> = { overview: 'Overview', requests: 'Open Requests', 'all-requests': 'All Requests', audit: 'Decision Log' }
+type Page = 'requests' | 'all-requests' | 'audit'
+const PAGE_LABELS: Record<Page, string> = { requests: 'Open Requests', 'all-requests': 'All Requests', audit: 'Decision Log' }
 
 const DEADLINES = [3, 7, 14]
 const PAGE_SIZES = [5, 8, 10, 20]
@@ -55,13 +55,13 @@ export function GroupBookingDashboard() {
   const [pageSize, setPageSize] = useState(8)
   const [queueCollapsed, setQueueCollapsed] = useState(false)
   const [scoreMap, setScoreMap] = useState<Record<string, number>>({})
-  const [greeting, setGreeting] = useState('Welcome')
+  const [greeting] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
   const [decision, setDecision] = useState<'approve' | 'edit' | 'reject' | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [audit, setAudit] = useState<AuditEntry[]>([])
-  const [today, setToday] = useState('')
+  const [today] = useState('')
   const [chat, setChat] = useState('')
   const [answer, setAnswer] = useState('')
   const [chatHistory, setChatHistory] = useState<ChatMessage[] | null>(null)
@@ -72,7 +72,7 @@ export function GroupBookingDashboard() {
   const [emailSent, setEmailSent] = useState(false)
   const noticeTimer = useRef<number | undefined>(undefined)
   const draftRef = useRef<HTMLElement | null>(null)
-  const [activePage, setActivePage] = useState<Page>('overview')
+  const [activePage, setActivePage] = useState<Page>('requests')
   const [panelOpen, setPanelOpen] = useState(true)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(224)
@@ -98,9 +98,7 @@ export function GroupBookingDashboard() {
 
   // initial load: queue (polled every 60s) + audit log
   useEffect(() => {
-    const hr = new Date().getHours(); setGreeting(hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening')
-    setToday(new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).toUpperCase())
-    let alive = true
+let alive = true
     const load = () => api.listRequests().then((r) => {
       if (!alive) return
       setRequests(r.requests); setTotal(r.total); setListState('ready'); setListError('')
@@ -158,6 +156,17 @@ export function GroupBookingDashboard() {
   useEffect(() => {
     if (activePage !== 'requests') { setChatHistory(null); setAnswer('') }
   }, [activePage])
+
+  // auto-generate "Why this recommendation?" as a chat message when score first loads for a request
+  useEffect(() => {
+    if (!score || !selectedId || chatHistory !== null || chatBusy) return
+    const dow = detail?.dow_travel != null ? (['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][detail.dow_travel] ?? `day ${detail.dow_travel}`) : null
+    const lf = detail?.load_factor != null ? `${Math.round(detail.load_factor * 100)}%` : 'unknown'
+    const topDrivers = (score.drivers ?? []).slice(0, 3).map((d) => `${featureLabel(d.feature)}: ${d.shap_value > 0 ? '+' : ''}${d.shap_value.toFixed(3)}`).join('; ')
+    const prompt = `[Request ID: ${selectedId}] Group booking: ${selected?.ond ?? ''} · ${pax} pax · ${aed(score.best_fare)}/pax · ${score.best_seats} seats. AI recommends: ${score.recommendation}. P(convert) = ${pct(score.p_convert_at_best)}, expected contribution = ${aed(score.expected_contribution)}, displacement cost = ${aed(score.displacement_cost)}, load factor = ${lf}${dow ? `, travel day = ${dow}` : ''}. Top SHAP drivers: ${topDrivers}. As a revenue management analyst, give a 2–3 sentence plain-English explanation of why the AI made this recommendation, referencing the specific numbers above. Mention any notable booking pattern or risk factor (e.g. load, day of week, agent history, fare ratio).`
+    setChatBusy(true)
+    api.chat(prompt, null).then((r) => { setChatHistory(r.history); setChatBusy(false) }).catch(() => setChatBusy(false))
+  }, [score, selectedId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // load all requests when navigating to that page
   useEffect(() => {
@@ -409,7 +418,6 @@ export function GroupBookingDashboard() {
       <a className="brand" href="#dashboard" aria-label="GroupLens home"><span className="brand-mark"><Plane size={18} strokeWidth={2.2}/></span>{!sidebarCollapsed && <span>GroupLens<span className="brand-sub">GROUP BOOKING AI</span></span>}</a>
       {!sidebarCollapsed && <div className="workspace-label">WORKSPACE <ChevronDown size={13}/></div>}
       <nav aria-label="Main navigation">
-        <button type="button" className={`nav-item ${activePage === 'overview' ? 'active' : ''}`} onClick={() => setActivePage('overview')} title="Overview"><LayoutDashboard size={17}/>{!sidebarCollapsed && <> Overview</>}</button>
         <button type="button" className={`nav-item ${activePage === 'requests' ? 'active' : ''}`} onClick={() => setActivePage('requests')} title="Open requests"><FileText size={17}/>{!sidebarCollapsed && <> Open requests <span className="nav-count">{total}</span></>}{sidebarCollapsed && total > 0 && <span className="nav-count-dot"/>}</button>
         <button type="button" className={`nav-item ${activePage === 'all-requests' ? 'active' : ''}`} onClick={() => { setActivePage('all-requests'); setAllReqState((s) => s === 'error' ? 'idle' : s) }} title="All requests"><List size={17}/>{!sidebarCollapsed && <> All requests</>}</button>
         <button type="button" className={`nav-item ${activePage === 'audit' ? 'active' : ''}`} onClick={() => setActivePage('audit')} title="Decision log"><History size={17}/>{!sidebarCollapsed && <> Decision log</>}</button>
@@ -425,98 +433,102 @@ export function GroupBookingDashboard() {
       <div className="page-content">
         {listState === 'error' && <div className="empty-state" role="alert">Cannot connect to server — {listError}. Check that the API is running and NEXT_PUBLIC_API_BASE_URL is correct.</div>}
 
-        {/* ── OVERVIEW PAGE ─────────────────────────────────────────── */}
-        {activePage === 'overview' && <><div className="heading-row"><div><div className="eyebrow">{today}</div><h1>{greeting} <span className="wave">✳</span></h1><p className="subheading">Here's your group booking performance at a glance.</p></div><button type="button" className="primary-button" style={{alignSelf:'center'}} onClick={() => setActivePage('requests')}>Review open requests →</button></div>
-        <div className="metrics-grid">
-          <Metric label="Open requests" value={listState === 'loading' ? '…' : String(total)} change="Quoted or submitted" icon={<FileText size={17}/>} tone="teal"/>
-          <Metric label="Selected P(convert)" value={scoring ? '…' : pct(probability)} change={selectedId ? `at ${aed(fare)} · ${seats} seats` : 'Select a request'} icon={<Activity size={17}/>} tone="blue"/>
-          <Metric label="Expected contribution" value={scoring ? '…' : aed(contribution)} change={score ? `${score.lift_vs_baseline >= 0 ? '+' : '−'}${aed(Math.abs(score.lift_vs_baseline))} vs. baseline` : '—'} icon={<ArrowUpRight size={17}/>} tone="amber" positive={!!score && score.lift_vs_baseline >= 0}/>
-          <Metric label="Remaining demand" value={scoring ? '…' : score ? `${Math.round(score.remaining_demand)} pax` : '—'} change="Est. individual demand" icon={<Plane size={17}/>} tone="rose"/>
-        </div>
-        </>}
-
         {/* ── OPEN REQUESTS PAGE ────────────────────────────────────── */}
         {activePage === 'requests' && <>
 
-        {/* Two-column layout: queue list left, recommendation right */}
-        <div className="content-grid" style={{marginBottom:14}}>
-          <section className="panel queue-panel">
-            <div className="panel-head">
-              <div><div className="panel-title">Requests to review <span className="count-badge">{filtered.length === requests.length ? total : `${filtered.length} of ${requests.length}`}</span></div><div className="panel-caption">Open group requests</div></div>
-              <div style={{display:'flex',gap:7,alignItems:'center'}}>
-                <button type="button" className={`subtle-button filter-toggle ${statusFilter.length ? 'active' : ''}`} aria-expanded={filterOpen} onClick={() => setFilterOpen((o) => !o)}><Filter size={13}/> Filter{statusFilter.length > 0 && <span className="filter-badge">{statusFilter.length}</span>}</button>
-                {hasFilters && <button type="button" className="filter-clear" onClick={clearFilters}>Clear</button>}
-              </div>
+        {/* Queue panel — full width, collapses when a request is opened */}
+        {!queueCollapsed && <section className="panel queue-panel" style={{marginBottom:14}}>
+          <div className="panel-head">
+            <div><div className="panel-title">Requests to review <span className="count-badge">{filtered.length === requests.length ? total : `${filtered.length} of ${requests.length}`}</span></div><div className="panel-caption">Open group requests</div></div>
+            <div style={{display:'flex',gap:7,alignItems:'center'}}>
+              <button type="button" className={`subtle-button filter-toggle ${statusFilter.length ? 'active' : ''}`} aria-expanded={filterOpen} onClick={() => setFilterOpen((o) => !o)}><Filter size={13}/> Filter{statusFilter.length > 0 && <span className="filter-badge">{statusFilter.length}</span>}</button>
+              {hasFilters && <button type="button" className="filter-clear" onClick={clearFilters}>Clear</button>}
             </div>
-            {(filterOpen || statusFilter.length > 0) && <div className="filter-bar" role="group" aria-label="Filter by status">
-              <span className="filter-label">STATUS</span>
-              {statuses.map((st) => <button type="button" key={st} className={`filter-chip ${statusFilter.includes(st) ? 'on' : ''}`} aria-pressed={statusFilter.includes(st)} onClick={() => toggleStatus(st)}>{st} <i>{statusCounts[st]}</i></button>)}
-              {statusFilter.length > 0 && <button type="button" className="filter-clear" onClick={() => setStatusFilter([])}>Clear</button>}
-            </div>}
-            <label className="search-box"><Search size={13}/><input ref={searchRef} aria-label="Search requests" placeholder="Search requests…" value={query} onChange={(e) => setQuery(e.target.value)}/><kbd>Ctrl K</kbd></label>
-            <div className="prob-legend"><span className="prob-dot prob-high"/>High (&ge;15%)<span className="prob-dot prob-mid"/>Mid (4–15%)<span className="prob-dot prob-low"/>Low (&lt;4%)<span className="prob-dot prob-none"/>Not scored</div>
-            <div className="request-list">
-              {pageRows.map((r) => {
-                const p = scoreMap[r.request_id]
-                return <button key={r.request_id} className={`request-row ${selectedId === r.request_id ? 'selected' : ''} ${pConvertClass(p)}`} onClick={() => setSelectedId(r.request_id)}>
-                  <span className="request-avatar">{initials(r.ond)}</span>
-                  <span className="request-main">
-                    <span className="request-route">{route(r.ond)}<span className="request-id">{r.request_id}</span></span>
-                    <span className="request-meta">{r.flight_number} · {r.group_size} pax · {aed(r.quoted_fare_per_pax)}/pax</span>
-                  </span>
-                  <span className="request-side">
-                    <span className={`status ${r.status.toLowerCase()}`}>{r.status}</span>
-                    <span className="request-date"><Clock3 size={12}/>{daysLeft(r.departure_dt) ?? '—'}d left</span>
-                    {p != null && <span className={`prob-badge ${pConvertClass(p)}`}>{pct(p)}</span>}
-                  </span>
-                </button>
-              })}
-              {listState === 'loading' && Array.from({ length: 5 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true"/>)}
-              {listState === 'ready' && filtered.length === 0 && <div className="empty-state">No requests match{statusFilter.length ? ` ${statusFilter.join(' / ')}` : ''}{query ? ` "${query}"` : ''}. <button type="button" className="filter-clear" onClick={clearFilters}>Clear filters</button></div>}
-            </div>
-            {filtered.length > 0 && <nav className="pagination" aria-label="Requests pagination"><span className="page-info">{(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filtered.length)} of {filtered.length}</span><div className="page-controls"><button type="button" className="page-btn" aria-label="Previous page" disabled={safePage === 1} onClick={() => setPage(safePage - 1)}>&#8249;</button>{pageList(safePage, totalPages).map((n, i) => n === '…' ? <span key={`e${i}`} className="page-gap">…</span> : <button type="button" key={n} className={`page-btn ${n === safePage ? 'current' : ''}`} aria-current={n === safePage ? 'page' : undefined} onClick={() => setPage(n)}>{n}</button>)}<button type="button" className="page-btn" aria-label="Next page" disabled={safePage === totalPages} onClick={() => setPage(safePage + 1)}>&#8250;</button></div><label className="page-size">Rows<select aria-label="Rows per page" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>{PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}</select></label></nav>}
-          </section>
+          </div>
+          {(filterOpen || statusFilter.length > 0) && <div className="filter-bar" role="group" aria-label="Filter by status">
+            <span className="filter-label">STATUS</span>
+            {statuses.map((st) => <button type="button" key={st} className={`filter-chip ${statusFilter.includes(st) ? 'on' : ''}`} aria-pressed={statusFilter.includes(st)} onClick={() => toggleStatus(st)}>{st} <i>{statusCounts[st]}</i></button>)}
+            {statusFilter.length > 0 && <button type="button" className="filter-clear" onClick={() => setStatusFilter([])}>Clear</button>}
+          </div>}
+          <label className="search-box"><Search size={13}/><input ref={searchRef} aria-label="Search requests" placeholder="Search requests…" value={query} onChange={(e) => setQuery(e.target.value)}/><kbd>Ctrl K</kbd></label>
+          <div className="prob-legend"><span className="prob-dot prob-high"/>High (&ge;15%)<span className="prob-dot prob-mid"/>Mid (4–15%)<span className="prob-dot prob-low"/>Low (&lt;4%)<span className="prob-dot prob-none"/>Not scored</div>
+          <div className="request-list">
+            {pageRows.map((r) => {
+              const p = scoreMap[r.request_id]
+              return <button key={r.request_id} className={`request-row ${selectedId === r.request_id ? 'selected' : ''} ${pConvertClass(p)}`} onClick={() => { setSelectedId(r.request_id); setQueueCollapsed(true) }}>
+                <span className="request-avatar">{initials(r.ond)}</span>
+                <span className="request-main">
+                  <span className="request-route">{route(r.ond)}<span className="request-id">{r.request_id}</span></span>
+                  <span className="request-meta">{r.flight_number} · {r.group_size} pax · {aed(r.quoted_fare_per_pax)}/pax</span>
+                </span>
+                <span className="request-side">
+                  <span className={`status ${r.status.toLowerCase()}`}>{r.status}</span>
+                  <span className="request-date"><Clock3 size={12}/>{daysLeft(r.departure_dt) ?? '—'}d left</span>
+                  {p != null && <span className={`prob-badge ${pConvertClass(p)}`}>{pct(p)}</span>}
+                </span>
+              </button>
+            })}
+            {listState === 'loading' && Array.from({ length: 5 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true"/>)}
+            {listState === 'ready' && filtered.length === 0 && <div className="empty-state">No requests match{statusFilter.length ? ` ${statusFilter.join(' / ')}` : ''}{query ? ` "${query}"` : ''}. <button type="button" className="filter-clear" onClick={clearFilters}>Clear filters</button></div>}
+          </div>
+          {filtered.length > 0 && <nav className="pagination" aria-label="Requests pagination"><span className="page-info">{(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filtered.length)} of {filtered.length}</span><div className="page-controls"><button type="button" className="page-btn" aria-label="Previous page" disabled={safePage === 1} onClick={() => setPage(safePage - 1)}>&#8249;</button>{pageList(safePage, totalPages).map((n, i) => n === '…' ? <span key={`e${i}`} className="page-gap">…</span> : <button type="button" key={n} className={`page-btn ${n === safePage ? 'current' : ''}`} aria-current={n === safePage ? 'page' : undefined} onClick={() => setPage(n)}>{n}</button>)}<button type="button" className="page-btn" aria-label="Next page" disabled={safePage === totalPages} onClick={() => setPage(safePage + 1)}>&#8250;</button></div><label className="page-size">Rows<select aria-label="Rows per page" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>{PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}</select></label></nav>}
+        </section>}
 
-          {/* RIGHT: AI recommendation */}
-          <section className={`panel recommendation-panel${score ? ` rec-${score.recommendation.toLowerCase()}` : ''}`}>
-            <div className="panel-head"><div><div className="panel-title">AI recommendation <span className="ai-tag"><Sparkles size={11}/> ASSIST</span></div><div className="panel-caption">{selected ? `${selected.request_id} · ${route(selected.ond)} · ${fmtDate(selected.departure_dt)}` : 'No request selected'}</div></div>
-              <div style={{display:'flex',gap:6,alignItems:'center'}}>
-                {scoring && <span className="scoring-badge">Scoring…</span>}
-                {score && <span className={`prob-badge large ${pConvertClass(score.p_convert_at_best)}`}>{pct(score.p_convert_at_best)}</span>}
-              </div>
-            </div>
-            {scoreError && <div className="empty-state" role="alert">{scoreError} <button className="subtle-button" onClick={() => setRetryTick((n) => n + 1)}>Retry</button></div>}
-            {!selectedId && !scoring && <div className="empty-state">Select a request from the list to see the AI recommendation.</div>}
-            {score && <>
-            <div className={`recommendation-banner rec-${score.recommendation.toLowerCase()}`}><div className="recommend-icon"><Sparkles size={17}/></div><div><div className="recommend-label">RECOMMENDED ACTION</div><strong>{REC_LABELS[score.recommendation] ?? score.recommendation}</strong></div><span className="confidence">{pct(score.p_convert_base)} base P(convert)</span></div>
-            <div className="offer-grid"><Offer label="Proposed fare" value={aed(fare)} suffix={`/ pax · ref ${aed(refFare)}`}/><Offer label="Seat allocation" value={`${seats} of ${pax} seats`} suffix={seats < pax ? 'partial allocation' : 'full request met'}/><Offer label="Agent must confirm within" value={`${deadline} days`} suffix="of receiving this offer"/><Offer label="Conversion probability" value={pct(probability)} suffix="model estimate" highlight/></div>
-            <div className="rec-why-box">
-              <div className="rec-why-header"><Sparkles size={12}/> Why this recommendation?</div>
-              <p className="rec-why-text">{getWhyExplanation(score, detail)}</p>
-              {drivers.length > 0 && <div className="rec-why-drivers">
-                <span className="rec-why-drivers-label">Key factors:</span>
-                {drivers.slice(0, 3).map((d) => (
-                  <span key={d.feature} className={`rec-why-driver ${d.shap_value >= 0 ? 'pos' : 'neg'}`}>
-                    {d.shap_value >= 0 ? '↑' : '↓'} {featureLabel(d.feature)}
-                  </span>
-                ))}
-              </div>}
-            </div>
-            <div className="insight-breakdown">
-              <div className="insight-row">
-                <div className="insight-item"><span className="insight-label">Expected contribution</span><b className={`insight-value ${(contribution ?? 0) > 0 ? 'positive' : 'negative'}`}>{aed(contribution)}</b><small>if group converts</small></div>
-                <div className="insight-item"><span className="insight-label">Rule-based baseline</span><b className="insight-value">{aed(score.baseline_contribution)}</b><small>historical avg for this route</small></div>
-                <div className="insight-item"><span className="insight-label">Lift vs baseline</span><b className={`insight-value ${score.lift_vs_baseline >= 0 ? 'positive' : 'negative'}`}>{score.lift_vs_baseline >= 0 ? '+' : ''}{aed(score.lift_vs_baseline)}</b><small>AI vs rule-based gain</small></div>
-                <div className="insight-item"><span className="insight-label">Displacement cost</span><b className={`insight-value ${score.displacement_cost > 0 ? 'negative' : ''}`}>{aed(score.displacement_cost)}</b><small>{score.displacement_cost > 0 ? 'demand displaced' : 'no demand displaced'}</small></div>
-              </div>
-            </div>
-            <div className="button-row"><button disabled={busy} className={`action-btn approve-btn ${decision && decision !== 'reject' ? 'is-approved' : ''}`} onClick={() => decide('approve')}><Check size={14}/> {decision && decision !== 'reject' ? 'Recorded' : offerChanged ? 'Approve Edit' : 'Approve'}</button><button disabled={busy} className="action-btn reject-btn" onClick={() => decide('reject')}><X size={14}/> {decision === 'reject' ? 'Rejected' : 'Reject'}</button><button className="action-btn counter-btn" onClick={draftCounteroffer}><FileText size={14}/> Counteroffer</button></div>
-            </>}
-          </section>
-        </div>
+        {/* Collapsed queue bar — click to return to list */}
+        {queueCollapsed && <div className="queue-collapsed-bar" style={{marginBottom:12}}>
+          <button type="button" className="subtle-button" onClick={() => setQueueCollapsed(false)}><ChevronLeft size={13}/> Back to requests</button>
+          <span className="queue-collapsed-info">{filtered.length} request{filtered.length !== 1 ? 's' : ''} in queue{hasFilters && <> · <button type="button" className="filter-clear" onClick={clearFilters}>Clear filters</button></>}</span>
+        </div>}
 
-        {/* Analysis panels — always shown when a request is selected */}
-        {selectedId && <>
+        {/* Request detail card — shown when queue collapsed */}
+        {queueCollapsed && selectedId && selected && <section className="panel request-detail-card" style={{marginBottom:14}}>
+          <div className="panel-head">
+            <div>
+              <div className="panel-title">{route(selected.ond)} <span className="request-id" style={{marginLeft:8}}>{selected.request_id}</span></div>
+              <div className="panel-caption">{selected.flight_number} · Departs {fmtDate(selected.departure_dt)}{left != null ? ` · ${left}d left` : ''}</div>
+            </div>
+            <span className={`status ${selected.status.toLowerCase()}`}>{selected.status}</span>
+          </div>
+          <div className="inventory-stats">
+            <div><span>Group size</span><b>{pax} pax</b></div>
+            <div><span>Quoted fare</span><b>{aed(selected.quoted_fare_per_pax)}/pax</b></div>
+            <div><span>Reference fare</span><b>{aed(refFare)}</b></div>
+            <div><span>Load factor</span><b>{detail?.load_factor != null ? `${Math.round(detail.load_factor * 100)}%` : scoring ? '…' : '—'}</b></div>
+            <div><span>Seats available</span><b>{detail?.seats_available ?? (scoring ? '…' : '—')}</b></div>
+            <div><span>Agent</span><b>{detail?.agent_code ?? '—'}</b></div>
+            <div><span>Agent conv. rate</span><b>{detail ? pct(detail.agent_conv_rate) : '—'}</b></div>
+            <div><span>Route conv. rate</span><b>{detail ? pct(detail.route_conv_rate) : '—'}</b></div>
+          </div>
+          {detail?.load_factor != null && <div className="capacity-bar"><span style={{ width: `${Math.round(detail.load_factor * 100)}%` }}/></div>}
+        </section>}
+
+        {/* AI recommendation — full width below detail card */}
+        {selectedId && queueCollapsed && <section className={`panel recommendation-panel${score ? ` rec-${score.recommendation.toLowerCase()}` : ''}`} style={{marginBottom:14}}>
+          <div className="panel-head"><div><div className="panel-title">AI recommendation <span className="ai-tag"><Sparkles size={11}/> ASSIST</span></div><div className="panel-caption">{selected ? `${selected.request_id} · ${route(selected.ond)} · ${fmtDate(selected.departure_dt)}` : 'No request selected'}</div></div>
+            <div style={{display:'flex',gap:6,alignItems:'center'}}>
+              {scoring && <span className="scoring-badge">Scoring…</span>}
+              {score && <span className={`prob-badge large ${pConvertClass(score.p_convert_at_best)}`}>{pct(score.p_convert_at_best)}</span>}
+            </div>
+          </div>
+          {scoreError && <div className="empty-state" role="alert">{scoreError} <button className="subtle-button" onClick={() => setRetryTick((n) => n + 1)}>Retry</button></div>}
+          {scoring && !score && <div className="empty-state">Scoring request…</div>}
+          {score && <>
+          <div className={`recommendation-banner rec-${score.recommendation.toLowerCase()}`}><div className="recommend-icon"><Sparkles size={17}/></div><div><div className="recommend-label">RECOMMENDED ACTION</div><strong>{REC_LABELS[score.recommendation] ?? score.recommendation}</strong></div><span className="confidence">{pct(score.p_convert_base)} base P(convert)</span></div>
+          <div className="offer-grid"><Offer label="Proposed fare" value={aed(fare)} suffix={`/ pax · ref ${aed(refFare)}`}/><Offer label="Seat allocation" value={`${seats} of ${pax} seats`} suffix={seats < pax ? 'partial allocation' : 'full request met'}/><Offer label="Agent must confirm within" value={`${deadline} days`} suffix="of receiving this offer"/><Offer label="Conversion probability" value={pct(probability)} suffix="model estimate" highlight/></div>
+          <div className="insight-breakdown">
+            <div className="insight-row">
+              <div className="insight-item"><span className="insight-label">Expected contribution</span><b className={`insight-value ${(contribution ?? 0) > 0 ? 'positive' : 'negative'}`}>{aed(contribution)}</b><small>if group converts</small></div>
+              <div className="insight-item"><span className="insight-label">Rule-based baseline</span><b className="insight-value">{aed(score.baseline_contribution)}</b><small>historical avg for this route</small></div>
+              <div className="insight-item"><span className="insight-label">Lift vs baseline</span><b className={`insight-value ${score.lift_vs_baseline >= 0 ? 'positive' : 'negative'}`}>{score.lift_vs_baseline >= 0 ? '+' : ''}{aed(score.lift_vs_baseline)}</b><small>AI vs rule-based gain</small></div>
+              <div className="insight-item"><span className="insight-label">Displacement cost</span><b className={`insight-value ${score.displacement_cost > 0 ? 'negative' : ''}`}>{aed(score.displacement_cost)}</b><small>{score.displacement_cost > 0 ? 'demand displaced' : 'no demand displaced'}</small></div>
+            </div>
+          </div>
+          <div className="button-row"><button disabled={busy} className={`action-btn approve-btn ${decision && decision !== 'reject' ? 'is-approved' : ''}`} onClick={() => decide('approve')}><Check size={14}/> {decision && decision !== 'reject' ? 'Recorded' : offerChanged ? 'Approve Edit' : 'Approve'}</button><button disabled={busy} className="action-btn reject-btn" onClick={() => decide('reject')}><X size={14}/> {decision === 'reject' ? 'Rejected' : 'Reject'}</button><button className="action-btn counter-btn" onClick={draftCounteroffer}><FileText size={14}/> Counteroffer</button></div>
+          </>}
+        </section>}
+
+        {/* Analysis panels */}
+        {selectedId && queueCollapsed && <>
         <div className="analysis-grid">
           <section className="panel analysis-panel"><div className="panel-head"><div><div className="panel-title">Scenario analysis</div><div className="panel-caption">Adjust the offer to explore the trade-off</div></div><span className="model-tag"><span className="live-dot"/> MODEL-BASED</span></div>
             {score ? <>
