@@ -448,22 +448,6 @@ def rebuild_db():
     return {"status": "rebuild complete"}
 
 
-# ── Web UI (static Next.js export) ────────────────────────────────────────────
-# Must be mounted LAST so the API routes above take precedence.
-# Build with:  cd frontend && npm ci && npm run build   (produces frontend/out)
-FRONTEND_DIR = Path(os.getenv("FRONTEND_DIR", Path(__file__).parent.parent / "frontend" / "out"))
-if FRONTEND_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
-else:
-    log.warning("Frontend build not found at %s - serving API only", FRONTEND_DIR)
-
-
-if __name__ == "__main__":
-    import uvicorn
-    logging.basicConfig(level=logging.INFO)
-    uvicorn.run("api.main:app", host="0.0.0.0", port=8000, reload=False)
-
-
 def _decided_request_ids() -> set:
     """Requests that already have a recorded human decision (approve / edit / reject)."""
     ids: set = set()
@@ -762,29 +746,17 @@ def revenue_opportunities(refresh: bool = False):
     }
 
 
-@app.post("/chat")
-def chat(body: ChatRequest):
-    """Agentic chat endpoint: runs Claude with tool use."""
-    from agent.counteroffer import run_agent
-    text, updated_history = run_agent(body.message, body.history)
-    return {"response": text, "history": updated_history}
-
-
-@app.post("/admin/rebuild")
-def rebuild_db():
-    """Rebuild database and feature cache (admin use)."""
-    from etl.build_snapshots import build_database
-    from etl.features import build_features
-    build_database(reload=True)
-    build_features(use_cache=False)
-    from models.train_conversion import train
-    train()
-    return {"status": "rebuild complete"}
-
-
 # ── Web UI (static Next.js export) ────────────────────────────────────────────
 # Must be mounted LAST so the API routes above take precedence.
 # Build with:  cd frontend && npm ci && npm run build   (produces frontend/out)
 FRONTEND_DIR = Path(os.getenv("FRONTEND_DIR", Path(__file__).parent.parent / "frontend" / "out"))
 if FRONTEND_DIR.is_dir():
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+else:
+    log.warning("Frontend build not found at %s - serving API only", FRONTEND_DIR)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    logging.basicConfig(level=logging.INFO)
+    uvicorn.run("api.main:app", host="0.0.0.0", port=8000, reload=False)

@@ -479,18 +479,11 @@ button { color: inherit; }
 .status.closed { background: var(--line); color: var(--ink); } .status.closed .status-dot { background: var(--ink); }
 
 /* ═══ Recommendation colours ═══ */
-.recommendation-panel.rec-counteroffer { background: var(--info-bg); border-color: var(--info-line); }
-.recommendation-banner.rec-counteroffer { background: var(--info-line); border-color: var(--info-solid); }
-.rec-counteroffer .recommend-icon { background: var(--info-solid); color: var(--surface); }
-.rec-partial .recommend-icon { background: var(--warn-solid); color: var(--surface); }
-.rec-reject .recommend-icon { background: var(--brand); color: var(--surface); }
+/* Accept=green · Counteroffer/Partial=amber · Reject=red — keep original palette */
 .approve-btn { background: var(--ok); } .approve-btn:hover:not(:disabled) { background: var(--ink); }
 .reject-btn { background: var(--brand); } .reject-btn:hover:not(:disabled) { background: var(--brand-dark); }
-.counter-btn { background: var(--info); } .counter-btn:hover { background: var(--info-solid); }
-.draft-button { border-color: var(--info-line); color: var(--info); } .draft-button:hover { border-color: var(--info-solid); color: var(--info); background: var(--info-bg); }
 .detail-table td:first-child { color: var(--ink-muted); }
 .detail-table td:last-child { color: var(--ink); }
-.rec-counteroffer .recommend-label { color: var(--info); }
 
 /* Chat bubble text colour fix */
 .chat-msg-user .chat-bubble-content .md, .chat-msg-user .chat-bubble-content .md * { color: var(--surface); }
