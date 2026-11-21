@@ -256,10 +256,10 @@ export function GroupBookingDashboard() {
     <section className="main-content" id="dashboard">
       <header className="topbar"><div className="breadcrumb">Revenue management <span>/</span> <b>{PAGE_LABELS[activePage]}</b></div><div className="top-actions"><span className={`api-status ${listState === 'error' ? 'error' : ''}`}><span className="live-dot"/> {listState === 'error' ? 'API unreachable' : 'Live'}</span></div></header>
       <div className="page-content">
-        {listState === ‘error’ && <div className="empty-state" role="alert">Cannot connect to server — {listError}. Check that the API is running and NEXT_PUBLIC_API_BASE_URL is correct.</div>}
+        {listState === 'error' && <div className="empty-state" role="alert">Cannot connect to server — {listError}. Check that the API is running and NEXT_PUBLIC_API_BASE_URL is correct.</div>}
 
         {/* ── OVERVIEW PAGE ─────────────────────────────────────────── */}
-        {activePage === ‘overview’ && <><div className="heading-row"><div><div className="eyebrow">{today}</div><h1>{greeting} <span className="wave">✳</span></h1><p className="subheading">Here’s your group booking performance at a glance.</p></div><button type="button" className="primary-button" style={{alignSelf:’center’}} onClick={() => setActivePage(‘requests’)}>Review open requests →</button></div>
+        {activePage === 'overview' && <><div className="heading-row"><div><div className="eyebrow">{today}</div><h1>{greeting} <span className="wave">✳</span></h1><p className="subheading">Here's your group booking performance at a glance.</p></div><button type="button" className="primary-button" style={{alignSelf:'center'}} onClick={() => setActivePage('requests')}>Review open requests →</button></div>
         <div className=”metrics-grid”>
           <Metric label=”Open requests” value={listState === 'loading' ? '…' : String(total)} change=”Quoted or submitted” icon={<FileText size={17}/>} tone=”teal”/>
           <Metric label=”Selected P(convert)” value={scoring ? '…' : pct(probability)} change={selectedId ? `at ${aed(fare)} · ${seats} seats` : 'Select a request'} icon={<Activity size={17}/>} tone=”blue”/>
