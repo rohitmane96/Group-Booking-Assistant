@@ -14,6 +14,7 @@ from typing import Any, Optional
 import pandas as pd
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 log = logging.getLogger(__name__)
@@ -258,6 +259,16 @@ def rebuild_db():
     from models.train_conversion import train
     train()
     return {"status": "rebuild complete"}
+
+
+# ── Web UI (static Next.js export) ────────────────────────────────────────────
+# Must be mounted LAST so the API routes above take precedence.
+# Build with:  cd frontend && npm ci && npm run build   (produces frontend/out)
+FRONTEND_DIR = Path(os.getenv("FRONTEND_DIR", Path(__file__).parent.parent / "frontend" / "out"))
+if FRONTEND_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+else:
+    log.warning("Frontend build not found at %s - serving API only", FRONTEND_DIR)
 
 
 if __name__ == "__main__":
