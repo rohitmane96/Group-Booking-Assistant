@@ -489,17 +489,36 @@ let alive = true
             </div>
             <span className={`status ${selected.status.toLowerCase()}`}>{selected.status}</span>
           </div>
-          <div className="inventory-stats">
-            <div><span>Group size</span><b>{pax} pax</b></div>
-            <div><span>Quoted fare</span><b>{aed(selected.quoted_fare_per_pax)}/pax</b></div>
-            <div><span>Reference fare</span><b>{aed(refFare)}</b></div>
-            <div><span>Load factor</span><b>{detail?.load_factor != null ? `${Math.round(detail.load_factor * 100)}%` : scoring ? '…' : '—'}</b></div>
-            <div><span>Seats available</span><b>{detail?.seats_available ?? (scoring ? '…' : '—')}</b></div>
-            <div><span>Agent</span><b>{detail?.agent_code ?? '—'}</b></div>
-            <div><span>Agent conv. rate</span><b>{detail ? pct(detail.agent_conv_rate) : '—'}</b></div>
-            <div><span>Route conv. rate</span><b>{detail ? pct(detail.route_conv_rate) : '—'}</b></div>
+          <div className="detail-table-grid">
+            <table className="detail-table">
+              <tbody>
+                <tr><td>Request ID</td><td><code>{selected.request_id}</code></td></tr>
+                <tr><td>Group ID</td><td><code>{selected.group_request_id}</code></td></tr>
+                <tr><td>Created</td><td>{fmtTs(selected.created_on)}</td></tr>
+                <tr><td>Route</td><td>{route(selected.ond)}</td></tr>
+                <tr><td>Flight</td><td>{selected.flight_number ?? '—'}</td></tr>
+                <tr><td>Departure</td><td>{fmtDate(selected.departure_dt)}{left != null ? <span style={{marginLeft:6,color:'#ff0041',fontWeight:700}}>{left}d left</span> : ''}</td></tr>
+                <tr><td>Trip type</td><td>{detail?.trip_type ?? (scoring ? '…' : '—')}</td></tr>
+                <tr><td>Lead time</td><td>{detail?.lead_time != null ? `${Math.round(detail.lead_time)} days` : scoring ? '…' : '—'}</td></tr>
+                <tr><td>No. of options</td><td>{detail?.num_options ?? (scoring ? '…' : '—')}</td></tr>
+              </tbody>
+            </table>
+            <table className="detail-table">
+              <tbody>
+                <tr><td>Group size</td><td>{pax} pax</td></tr>
+                <tr><td>Quoted fare</td><td>{aed(selected.quoted_fare_per_pax)} / pax</td></tr>
+                <tr><td>Reference fare</td><td>{aed(refFare)} / pax</td></tr>
+                <tr><td>Fare ratio</td><td>{detail?.fare_ratio != null ? `${(detail.fare_ratio * 100).toFixed(1)}% of ref` : scoring ? '…' : '—'}</td></tr>
+                <tr><td>Competitor fare</td><td>{detail?.competitor_fare ? aed(detail.competitor_fare) : '—'}</td></tr>
+                <tr><td>Load factor</td><td>{detail?.load_factor != null ? `${Math.round(detail.load_factor * 100)}%` : scoring ? '…' : '—'}</td></tr>
+                <tr><td>Seats available</td><td>{detail?.seats_available ?? (scoring ? '…' : '—')}</td></tr>
+                <tr><td>Agent</td><td>{detail?.agent_code ?? '—'}{detail?.agent_email ? <span style={{color:'#8a9199',marginLeft:6,fontWeight:400}}>{detail.agent_email}</span> : ''}</td></tr>
+                <tr><td>Agent conv. rate</td><td>{detail ? pct(detail.agent_conv_rate) : '—'}<span style={{color:'#8a9199',marginLeft:6,fontWeight:400,fontSize:'.72rem'}}>({detail?.agent_prior_requests ?? '—'} prior requests)</span></td></tr>
+                <tr><td>Route conv. rate</td><td>{detail ? pct(detail.route_conv_rate) : '—'}<span style={{color:'#8a9199',marginLeft:6,fontWeight:400,fontSize:'.72rem'}}>({detail?.route_prior_requests ?? '—'} on this route)</span></td></tr>
+              </tbody>
+            </table>
           </div>
-          {detail?.load_factor != null && <div className="capacity-bar"><span style={{ width: `${Math.round(detail.load_factor * 100)}%` }}/></div>}
+          {detail?.load_factor != null && <><div style={{marginTop:10,marginBottom:3,fontSize:'.72rem',color:'#8a9199',fontWeight:600,textTransform:'uppercase',letterSpacing:'.05em'}}>Flight load</div><div className="capacity-bar"><span style={{ width: `${Math.round(detail.load_factor * 100)}%` }}/></div></>}
         </section>}
 
         {/* AI recommendation — full width below detail card */}

@@ -87,8 +87,14 @@ button { color: inherit; }
 .queue-collapsed-bar{display:flex;align-items:center;gap:12px;padding:7px 12px;background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:8px;font-size:.78rem}
 .queue-collapsed-info{color:#6b777c;margin-left:auto}
 
-/* Request detail card — quick facts shown when queue collapses */
-.request-detail-card .inventory-stats{display:flex;flex-wrap:wrap;gap:10px 20px;padding:4px 0 8px}
+/* Request detail card — 2-column table layout */
+.detail-table-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 32px;padding:4px 0 6px}
+.detail-table{width:100%;border-collapse:collapse}
+.detail-table td{padding:5px 10px;font-size:.8rem;vertical-align:middle;border-bottom:1px solid rgba(0,0,0,.04)}
+.detail-table td:first-child{color:#6b8090;white-space:nowrap;font-weight:500;width:130px;background:rgba(0,0,0,.018);border-radius:4px 0 0 4px}
+.detail-table td:last-child{color:#2c3a42;font-weight:600}
+.detail-table code{font-size:.75rem;background:rgba(0,0,0,.06);padding:1px 5px;border-radius:3px;font-weight:500}
+@media(max-width:700px){.detail-table-grid{grid-template-columns:1fr}}
 
 /* Why recommendation box */
 .rec-why-box{margin:10px 0;padding:11px 14px;background:rgba(248,249,250,.85);border:1px solid rgba(0,0,0,.08);border-radius:9px}
