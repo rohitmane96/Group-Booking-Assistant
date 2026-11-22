@@ -485,6 +485,17 @@ button { color: inherit; }
 .detail-table td:first-child { color: var(--ink-muted); }
 .detail-table td:last-child { color: var(--ink); }
 
+/* ═══ Why this recommendation — inline Claude explanation ═══ */
+.rec-why-box { margin: 10px 0 8px; padding: 10px 12px; border-radius: 8px; background: var(--brand-tint); border-left: 3px solid var(--brand); }
+.rec-why-box p { margin: 4px 0 0; font-size: var(--text-sm); color: var(--ink); line-height: 1.55; }
+.rec-why-label { display: inline-flex; align-items: center; gap: 5px; font-size: var(--text-xs); font-weight: 700; color: var(--brand); letter-spacing: .3px; }
+.rec-why-loading { opacity: .6; }
+
+/* ═══ Rejection email card ═══ */
+.rejection-card { border-color: var(--brand-line) !important; }
+.rejection-card .counteroffer-card-head { background: var(--danger-bg); }
+.rejection-card .counteroffer-card-head b { color: var(--danger); }
+
 /* Chat bubble text colour fix */
 .chat-msg-user .chat-bubble-content .md, .chat-msg-user .chat-bubble-content .md * { color: var(--surface); }
 .chat-msg-user .chat-bubble-content .md li::marker { color: var(--surface); }

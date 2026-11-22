@@ -67,6 +67,9 @@ export function GroupBookingDashboard() {
   const [chatHistory, setChatHistory] = useState<ChatMessage[] | null>(null)
   const [chatBusy, setChatBusy] = useState(false)
   const [counterofferDraft, setCounterofferDraft] = useState('')
+  const [rejectionDraft, setRejectionDraft] = useState('')
+  const [rejectionSending, setRejectionSending] = useState(false)
+  const [rejectionSent, setRejectionSent] = useState(false)
   const [recipientEmail, setRecipientEmail] = useState('')
   const [emailSending, setEmailSending] = useState(false)
   const [emailSent, setEmailSent] = useState(false)
@@ -148,8 +151,8 @@ let alive = true
     if (!selectedId) return
     let alive = true
     setDetail(null); setScore(null); setScenario(null); setScoreError(''); setScoring(true)
-    setDecision(null); setAnswer(''); setCounterofferDraft(''); setChatHistory(null)
-    setEmailSent(false)
+    setDecision(null); setAnswer(''); setCounterofferDraft(''); setRejectionDraft(''); setChatHistory(null)
+    setEmailSent(false); setRejectionSent(false)
     api.getRequest(selectedId).then((d) => alive && setDetail(d)).catch(() => {})
     api.score(selectedId).then((s) => {
       if (!alive) return
@@ -295,7 +298,47 @@ let alive = true
       setDecision(act)
       setAudit((a) => [res.entry, ...a])
       flash(act === 'reject' ? `Request rejected · ${selectedId}` : `Decision recorded · ${selectedId}`)
+      if (act === 'reject') draftRejectionEmail()
     } catch (e) { flash(errMsg(e)) } finally { setBusy(false) }
+  }
+
+  async function draftRejectionEmail() {
+    if (!selectedId || !score) return
+    const lf = detail?.load_factor != null ? `${Math.round(detail.load_factor * 100)}%` : 'unknown'
+    const topDrivers = (score.drivers ?? []).slice(0, 3).map((d) => `${featureLabel(d.feature)}: ${d.shap_value > 0 ? '+' : ''}${d.shap_value.toFixed(3)}`).join('; ')
+    const agentName = detail?.agent_code ?? 'Agent'
+    const prompt = `Draft a professional rejection email from Air Arabia Group Desk to ${agentName} for request ${selectedId} (${selected?.ond ?? ''}, ${pax} pax, departure ${fmtDate(selected?.departure_dt ?? null)}).
+
+Rejection details:
+- Quoted fare: ${aed(selected?.quoted_fare_per_pax ?? 0)}/pax vs reference fare ${aed(refFare)}/pax (fare ratio: ${detail?.fare_ratio != null ? `${(detail.fare_ratio*100).toFixed(0)}%` : 'unknown'} of market rate)
+- Load factor on requested flight: ${lf}
+- AI recommendation was: ${score.recommendation}
+- Key factors: ${topDrivers}
+- Minimum viable fare for this route/date: ${aed(score.best_fare)}/pax
+
+Write a 3–4 paragraph email that:
+1. Politely declines the request with a clear reason (e.g. fare below commercial threshold, high load factor displacing higher-value demand)
+2. Gives a specific, actionable suggestion (e.g. resubmit at ${aed(score.best_fare)}/pax, consider a different departure date, reduce group size to ${score.best_seats} seats)
+3. Keeps the door open for future business
+Use professional airline tone. Subject line on first line as "Subject: ..."`
+    try {
+      const r = await api.chat(prompt, null)
+      const msg = r.history.find((m) => m.role === 'assistant')
+      if (msg) setRejectionDraft(typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content))
+    } catch { /* silent — draft is optional */ }
+  }
+
+  async function sendRejectionEmail() {
+    if (!selectedId || !rejectionDraft || rejectionSending) return
+    const toEmail = recipientEmail || detail?.agent_email || ''
+    if (!toEmail) { flash('Enter recipient email to send'); return }
+    setRejectionSending(true)
+    try {
+      const subject = `Group booking update — ${selected?.ond ?? selectedId}`
+      await api.sendCounteroffer(selectedId, { to_email: toEmail, subject, body: rejectionDraft })
+      setRejectionSent(true)
+      flash(`Rejection email sent to ${toEmail}`)
+    } catch (e) { flash(errMsg(e)) } finally { setRejectionSending(false) }
   }
 
   async function draftCounteroffer() {
@@ -583,6 +626,21 @@ let alive = true
               <div className="insight-item"><span className="insight-label">Displacement cost</span><b className={`insight-value ${score.displacement_cost > 0 ? 'negative' : ''}`}>{aed(score.displacement_cost)}</b><small>{score.displacement_cost > 0 ? 'demand displaced' : 'no demand displaced'}</small></div>
             </div>
           </div>
+          {/* Why this recommendation — inline explanation from Claude */}
+          {(() => {
+            const whyMsg = chatHistory?.find((m) => m.role === 'assistant')
+            const whyText = whyMsg ? (typeof whyMsg.content === 'string' ? whyMsg.content : null) : null
+            return whyText ? (
+              <div className="rec-why-box">
+                <span className="rec-why-label"><Sparkles size={11}/> Why this recommendation</span>
+                <p>{whyText}</p>
+              </div>
+            ) : chatBusy ? (
+              <div className="rec-why-box rec-why-loading">
+                <span className="rec-why-label"><Sparkles size={11}/> Analysing…</span>
+              </div>
+            ) : null
+          })()}
           <div className="button-row"><button disabled={busy} className={`action-btn approve-btn ${decision && decision !== 'reject' ? 'is-approved' : ''}`} onClick={() => decide('approve')}><Check size={14}/> {decision && decision !== 'reject' ? 'Recorded' : offerChanged ? 'Approve Edit' : 'Approve'}</button><button disabled={busy} className="action-btn reject-btn" onClick={() => decide('reject')}><X size={14}/> {decision === 'reject' ? 'Rejected' : 'Reject'}</button><button className="action-btn counter-btn" onClick={draftCounteroffer}><FileText size={14}/> Counteroffer</button></div>
           </>}
         </section>}
@@ -776,6 +834,20 @@ let alive = true
         </div>}
 
         {/* Counteroffer draft — only on requests page */}
+        {isRequestContext && rejectionDraft && <section className="counteroffer-card rejection-card" aria-label="Rejection email draft">
+          <div className="counteroffer-card-head"><div><b>Rejection email</b><span>{rejectionSent ? 'SENT' : 'DRAFT · NOT SENT'}</span></div><X size={15}/></div>
+          <label className="sr-only" htmlFor="rejection-draft">Editable rejection message</label>
+          <textarea id="rejection-draft" value={rejectionDraft} onChange={(e) => { setRejectionDraft(e.target.value); setRejectionSent(false) }}/>
+          <div className="counteroffer-actions">
+            <button type="button" className="copy-draft-button" onClick={async () => { try { await navigator.clipboard.writeText(rejectionDraft); flash('Rejection email copied') } catch { flash('Clipboard unavailable') } }}><Copy size={13}/> Copy</button>
+            <div className="send-email-row">
+              <input className="email-input" type="email" placeholder="Recipient email…" value={recipientEmail} onChange={(e) => { setRecipientEmail(e.target.value); setRejectionSent(false) }} aria-label="Recipient email address"/>
+              <button type="button" className={`send-email-button ${rejectionSent ? 'is-sent' : ''}`} onClick={sendRejectionEmail} disabled={rejectionSending || !recipientEmail || rejectionSent}>{rejectionSent ? <><Check size={13}/> Sent</> : rejectionSending ? 'Sending…' : <><Send size={13}/> Send</>}</button>
+            </div>
+          </div>
+          {detail?.agent_email && <p className="counteroffer-note agent-email-note"><Check size={10}/> Agent email: {detail.agent_email}</p>}
+          <p className="counteroffer-note">Review before sending. Includes reason and actionable suggestions for the agent.</p>
+        </section>}
         {isRequestContext && counterofferDraft && <section ref={draftRef} className="counteroffer-card" aria-label="Counteroffer draft">
           <div className="counteroffer-card-head"><div><b>Counteroffer email</b><span>{emailSent ? 'SENT' : 'DRAFT · NOT SENT'}</span></div><FileText size={15}/></div>
           <label className="sr-only" htmlFor="counteroffer-draft">Editable counteroffer message</label>
