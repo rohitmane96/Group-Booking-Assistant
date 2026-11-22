@@ -104,6 +104,14 @@ export function GroupBookingDashboard() {
   const [selectedAllId, setSelectedAllId] = useState<string | null>(null)
   const [allDetail, setAllDetail] = useState<RequestDetail | null>(null)
   const [allDetailLoading, setAllDetailLoading] = useState(false)
+  const [confirmModal, setConfirmModal] = useState<{
+    open: boolean
+    action: 'approve' | 'edit' | 'reject' | null
+    title: string
+    details: string[]
+    confirmLabel: string
+    variant: 'approve' | 'danger'
+  }>({ open: false, action: null, title: '', details: [], confirmLabel: '', variant: 'approve' })
 
   function flash(msg: string) {
     setNotice(msg)
@@ -288,15 +296,35 @@ let alive = true
   const left = selected ? daysLeft(selected.departure_dt) : null
   const offerChanged = !!score && (fare !== Math.round(score.best_fare) || seats !== score.best_seats)
 
-  async function decide(action: 'approve' | 'reject') {
+  function decide(action: 'approve' | 'reject') {
     if (!selectedId || busy) return
     const act = action === 'approve' && offerChanged ? 'edit' : action
-    const confirmMsg = act === 'reject'
-      ? `Reject request ${selectedId}?\n\nThis will record a rejection in the audit log. A rejection email will be drafted for the agent.`
-      : act === 'edit'
-      ? `Approve with edited offer?\n\n${seats} seats at ${aed(fare)}/pax · ${deadline}-day deadline\n\nThis will record your decision in the audit log.`
-      : `Approve AI recommendation?\n\n${seats} seats at ${aed(fare)}/pax · ${deadline}-day deadline\n\nThis will record your decision in the audit log.`
-    if (!window.confirm(confirmMsg)) return
+    const isReject = act === 'reject'
+    setConfirmModal({
+      open: true,
+      action: act,
+      title: isReject ? `Reject ${selectedId}?` : act === 'edit' ? 'Approve with edited offer?' : 'Approve recommendation?',
+      details: isReject
+        ? [
+            `Route: ${selected?.ond ?? '—'} · ${pax} pax`,
+            `Departure: ${fmtDate(selected?.departure_dt ?? null)}`,
+            'A rejection email draft will be generated for the agent.',
+            'This action will be recorded in the audit log.',
+          ]
+        : [
+            `${seats} seats · ${aed(fare)}/pax · ${deadline}-day deadline`,
+            `Expected contribution: ${score ? aed(score.expected_contribution) : '—'}`,
+            'This action will be recorded in the audit log.',
+          ],
+      confirmLabel: isReject ? 'Confirm Reject' : act === 'edit' ? 'Approve Edit' : 'Approve',
+      variant: isReject ? 'danger' : 'approve',
+    })
+  }
+
+  async function confirmAction() {
+    const act = confirmModal.action
+    if (!act || !selectedId) return
+    setConfirmModal((m) => ({ ...m, open: false }))
     setBusy(true)
     try {
       const body: ApprovalRequest = act === 'reject' ? { action: act } : { action: act, fare, seats }
@@ -908,6 +936,32 @@ let alive = true
       </>}
     </aside>
     {notice && <div className="toast" role="status"><Check size={15}/>{notice}</div>}
+
+    {/* Confirmation modal */}
+    {confirmModal.open && (
+      <div className="confirm-overlay" role="dialog" aria-modal="true" aria-labelledby="confirm-title" onClick={() => setConfirmModal((m) => ({ ...m, open: false }))}>
+        <div className="confirm-modal" onClick={(e) => e.stopPropagation()}>
+          <div className={`confirm-modal-header confirm-header-${confirmModal.variant}`}>
+            <span className="confirm-header-icon">
+              {confirmModal.variant === 'danger' ? <X size={20} strokeWidth={2.5}/> : <Check size={20} strokeWidth={2.5}/>}
+            </span>
+            <h3 id="confirm-title">{confirmModal.title}</h3>
+          </div>
+          <div className="confirm-modal-body">
+            {confirmModal.details.map((d, i) => (
+              <p key={i} className={i === confirmModal.details.length - 1 ? 'confirm-audit-note' : ''}>{d}</p>
+            ))}
+          </div>
+          <div className="confirm-modal-footer">
+            <button className="confirm-cancel-btn" onClick={() => setConfirmModal((m) => ({ ...m, open: false }))}>Cancel</button>
+            <button className={`confirm-action-btn confirm-action-${confirmModal.variant}`} onClick={confirmAction}>
+              {confirmModal.variant === 'danger' ? <X size={14}/> : <Check size={14}/>}
+              {confirmModal.confirmLabel}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
   </main>
 }
 
