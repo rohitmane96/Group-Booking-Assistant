@@ -492,9 +492,28 @@ button { color: inherit; }
 .rec-why-loading { opacity: .6; }
 
 /* ═══ Rejection email card ═══ */
-.rejection-card { border-color: var(--brand-line) !important; }
+.rejection-card { border-color: var(--danger) !important; }
 .rejection-card .counteroffer-card-head { background: var(--danger-bg); }
 .rejection-card .counteroffer-card-head b { color: var(--danger); }
+.rejection-card .counteroffer-card-head span { color: var(--danger); }
+
+/* ═══ Decision recorded banner ═══ */
+.decision-recorded-banner {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 12px 14px; border-radius: 8px; margin-top: 2px;
+  font-size: var(--text-sm); font-weight: 600; line-height: 1.4;
+}
+.decision-recorded-banner svg { flex-shrink: 0; margin-top: 2px; }
+.decision-recorded-banner span { display: flex; flex-direction: column; gap: 2px; }
+.decision-recorded-banner small { font-weight: 400; font-size: var(--text-xs); opacity: .75; }
+.decision-approved {
+  background: var(--ok-bg); color: var(--ok);
+  border: 1px solid var(--ok-line);
+}
+.decision-rejected {
+  background: var(--danger-bg); color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+}
 
 /* Chat bubble text colour fix */
 .chat-msg-user .chat-bubble-content .md, .chat-msg-user .chat-bubble-content .md * { color: var(--surface); }

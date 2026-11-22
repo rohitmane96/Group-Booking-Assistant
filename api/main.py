@@ -352,6 +352,16 @@ def draft_counteroffer(request_id: str, body: CounterOfferRequest):
     return result
 
 
+@app.post("/requests/{request_id}/rejection")
+def draft_rejection(request_id: str):
+    """Draft a structured rejection email using engine outputs."""
+    from agent.tools import draft_rejection as _draft
+    result = _draft(request_id)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
 @app.post("/requests/{request_id}/send-counteroffer")
 def send_counteroffer(request_id: str, body: SendCounterOfferRequest):
     """Send a counteroffer email via SMTP. Requires SMTP_* env vars."""

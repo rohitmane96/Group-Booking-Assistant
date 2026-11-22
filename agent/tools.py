@@ -310,6 +310,85 @@ def draft_counteroffer(request_id: str, fare: float, seats: int, deadline_days: 
     }
 
 
+# ── Tool: draft_rejection ─────────────────────────────────────────────────────
+
+def draft_rejection(request_id: str) -> dict:
+    """Draft a rejection email using the standard template and engine outputs."""
+    req = get_request(request_id)
+    if "error" in req:
+        return req
+
+    # Score (light — we only need recommendation, best_fare, best_seats, displacement)
+    scored = score_request(request_id, light=True)
+    if "error" in scored:
+        return scored
+
+    departure_dt = req.get("departure_dt")
+    if departure_dt:
+        try:
+            dep_date = pd.to_datetime(departure_dt).strftime("%d %b %Y")
+        except Exception:
+            dep_date = str(departure_dt)
+    else:
+        dep_date = "TBD"
+
+    ond_display = req.get("ond", "").replace("/", " – ")
+    rec = scored.get("recommendation", "REJECT")
+    fare_ratio = req.get("fare_ratio", None)
+    lf = req.get("load_factor", None)
+    best_fare = scored.get("best_fare", None)
+    best_seats = scored.get("best_seats", None)
+    quoted = req.get("quoted_fare_per_pax", 0) or 0
+    seats = req.get("group_size", req.get("pax", 0)) or 0
+
+    # Build rejection reason
+    reasons = []
+    if fare_ratio is not None and not pd.isna(fare_ratio) and fare_ratio < 0.90:
+        reasons.append(
+            f"The quoted fare of AED {quoted:,.0f}/pax is {fare_ratio*100:.0f}% of the market reference rate, "
+            f"which falls below our minimum commercial threshold."
+        )
+    if lf is not None and not pd.isna(lf) and lf > 0.80:
+        reasons.append(
+            f"The requested flight currently has a load factor of {lf*100:.0f}%, "
+            f"leaving insufficient capacity to accommodate the full group without displacing higher-yield demand."
+        )
+    if not reasons:
+        reasons.append(
+            f"After reviewing the request against current inventory levels and fare conditions, "
+            f"we are unable to offer commercially viable terms for this group at this time."
+        )
+    rejection_reason = "\n".join(f"  • {r}" for r in reasons)
+
+    # Build suggestion
+    suggestions = []
+    if best_fare and best_fare > quoted:
+        suggestions.append(f"Resubmit at AED {best_fare:,.0f}/pax — our minimum viable fare for this route/date.")
+    if best_seats and seats and best_seats < seats:
+        suggestions.append(f"Consider reducing the group size to {best_seats} seats to fit within available capacity.")
+    suggestions.append("Contact your Group Desk representative to explore alternative departure dates.")
+    suggestion = "\n".join(f"  • {s}" for s in suggestions)
+
+    from agent.prompts import REJECTION_TEMPLATE
+    filled = REJECTION_TEMPLATE.format(
+        ond=ond_display,
+        flight_number=req.get("flight_number", "TBD"),
+        departure_date=dep_date,
+        seats=seats,
+        quoted_fare=quoted,
+        rejection_reason=rejection_reason,
+        suggestion=suggestion,
+    )
+
+    return {
+        "request_id": request_id,
+        "rejection_email": filled,
+        "recommendation": rec,
+        "best_fare": best_fare,
+        "best_seats": best_seats,
+    }
+
+
 # ── Tool definitions for Anthropic tool_use API ───────────────────────────────
 
 TOOL_DEFINITIONS = [

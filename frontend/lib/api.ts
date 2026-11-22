@@ -159,6 +159,7 @@ export const api = {
   score: (id: string) => post<ScoreResponse>(`/requests/${enc(id)}/score`),
   scenario: (id: string, p: OfferParams) => post<ScenarioResponse>(`/requests/${enc(id)}/scenario`, p),
   counteroffer: (id: string, p: OfferParams) => post<CounterOfferResponse>(`/requests/${enc(id)}/counteroffer`, p),
+  rejection: (id: string) => post<{ request_id: string; rejection_email: string; recommendation: string; best_fare: number | null; best_seats: number | null }>(`/requests/${enc(id)}/rejection`, {}),
   sendCounteroffer: (id: string, b: SendCounterOfferRequest) => post<SendCounterOfferResponse>(`/requests/${enc(id)}/send-counteroffer`, b),
   approve: (id: string, b: ApprovalRequest) => post<{ status: 'recorded'; entry: AuditEntry }>(`/requests/${enc(id)}/approve`, b),
   audit: () => call<{ entries: AuditEntry[] }>('/audit'),

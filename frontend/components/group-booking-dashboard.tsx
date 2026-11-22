@@ -291,6 +291,12 @@ let alive = true
   async function decide(action: 'approve' | 'reject') {
     if (!selectedId || busy) return
     const act = action === 'approve' && offerChanged ? 'edit' : action
+    const confirmMsg = act === 'reject'
+      ? `Reject request ${selectedId}?\n\nThis will record a rejection in the audit log. A rejection email will be drafted for the agent.`
+      : act === 'edit'
+      ? `Approve with edited offer?\n\n${seats} seats at ${aed(fare)}/pax · ${deadline}-day deadline\n\nThis will record your decision in the audit log.`
+      : `Approve AI recommendation?\n\n${seats} seats at ${aed(fare)}/pax · ${deadline}-day deadline\n\nThis will record your decision in the audit log.`
+    if (!window.confirm(confirmMsg)) return
     setBusy(true)
     try {
       const body: ApprovalRequest = act === 'reject' ? { action: act } : { action: act, fare, seats }
@@ -303,28 +309,10 @@ let alive = true
   }
 
   async function draftRejectionEmail() {
-    if (!selectedId || !score) return
-    const lf = detail?.load_factor != null ? `${Math.round(detail.load_factor * 100)}%` : 'unknown'
-    const topDrivers = (score.drivers ?? []).slice(0, 3).map((d) => `${featureLabel(d.feature)}: ${d.shap_value > 0 ? '+' : ''}${d.shap_value.toFixed(3)}`).join('; ')
-    const agentName = detail?.agent_code ?? 'Agent'
-    const prompt = `Draft a professional rejection email from Air Arabia Group Desk to ${agentName} for request ${selectedId} (${selected?.ond ?? ''}, ${pax} pax, departure ${fmtDate(selected?.departure_dt ?? null)}).
-
-Rejection details:
-- Quoted fare: ${aed(selected?.quoted_fare_per_pax ?? 0)}/pax vs reference fare ${aed(refFare)}/pax (fare ratio: ${detail?.fare_ratio != null ? `${(detail.fare_ratio*100).toFixed(0)}%` : 'unknown'} of market rate)
-- Load factor on requested flight: ${lf}
-- AI recommendation was: ${score.recommendation}
-- Key factors: ${topDrivers}
-- Minimum viable fare for this route/date: ${aed(score.best_fare)}/pax
-
-Write a 3–4 paragraph email that:
-1. Politely declines the request with a clear reason (e.g. fare below commercial threshold, high load factor displacing higher-value demand)
-2. Gives a specific, actionable suggestion (e.g. resubmit at ${aed(score.best_fare)}/pax, consider a different departure date, reduce group size to ${score.best_seats} seats)
-3. Keeps the door open for future business
-Use professional airline tone. Subject line on first line as "Subject: ..."`
+    if (!selectedId) return
     try {
-      const r = await api.chat(prompt, null)
-      const msg = r.history.find((m) => m.role === 'assistant')
-      if (msg) setRejectionDraft(typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content))
+      const r = await api.rejection(selectedId)
+      if (r.rejection_email) setRejectionDraft(r.rejection_email.trim())
     } catch { /* silent — draft is optional */ }
   }
 
@@ -365,6 +353,40 @@ Use professional airline tone. Subject line on first line as "Subject: ..."`
       setEmailSent(true)
       flash(`Counteroffer sent to ${recipientEmail}`)
     } catch (e) { flash(errMsg(e)) } finally { setEmailSending(false) }
+  }
+
+  function getWhyExplanation(s: typeof score, d: typeof detail): string {
+    if (!s) return ''
+    const rec = s.recommendation
+    const p = s.p_convert_at_best
+    const pStr = `${(p * 100).toFixed(1)}%`
+    const fareRatio = d?.fare_ratio ?? null
+    const lf = d?.load_factor ?? null
+    const lfStr = lf != null ? `${Math.round(lf * 100)}%` : null
+    const agentRate = d?.agent_conv_rate != null ? `${(d.agent_conv_rate * 100).toFixed(1)}%` : null
+    const routeRate = d?.route_conv_rate != null ? `${(d.route_conv_rate * 100).toFixed(1)}%` : null
+    const dow = d?.dow_travel != null ? (['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][d.dow_travel] ?? null) : null
+    const liftStr = s.lift_vs_baseline > 0 ? `AI pricing adds ${aed(s.lift_vs_baseline)} over the rule-based baseline.` : ''
+    const dispStr = s.displacement_cost > 0 ? ` Displacement cost is ${aed(s.displacement_cost)} — seats held for this group displace expected individual demand.` : ' No significant displacement of individual demand expected.'
+
+    if (rec === 'Accept') {
+      if (p >= 0.5) return `Strong conversion signal at ${pStr} — well above our 50% high-confidence threshold. Expected contribution of ${aed(s.expected_contribution)} is positive.${dispStr}${fareRatio != null ? ` Agent is quoting at ${Math.round(fareRatio*100)}% of reference fare.` : ''} ${liftStr}`
+      if (p >= 0.3) return `Decent conversion probability (${pStr})${fareRatio != null ? ` with fare at ${Math.round(fareRatio*100)}% of reference` : ''}. Expected contribution ${aed(s.expected_contribution)} is positive.${lfStr ? ` Flight is ${lfStr} full` : ''}${dow ? ` on a ${dow}` : ''}${agentRate ? ` — agent converts at ${agentRate} historically` : ''}.${dispStr} ${liftStr}`
+      if (fareRatio != null && fareRatio <= 0.85) return `Agent is offering a ${Math.round((1-fareRatio)*100)}% discount off reference fare (${Math.round(fareRatio*100)}% of ref). Even at a moderate P(convert) of ${pStr}, the expected contribution (${aed(s.expected_contribution)}) is positive${lfStr && lf! < 0.7 ? ` and the flight is only ${lfStr} full — displacement risk is low` : ''}.${routeRate ? ` This route converts at ${routeRate} historically.` : ''} ${liftStr}`
+      return `Expected contribution (${aed(s.expected_contribution)}) is positive and conversion probability (${pStr}) meets our acceptance threshold.${lfStr ? ` Load factor is ${lfStr}.` : ''}${agentRate ? ` Agent historical rate: ${agentRate}.` : ''} ${liftStr}`
+    }
+    if (rec === 'Counteroffer') {
+      if (p < 0.1) return `Conversion probability at the agent's quoted fare is very low (${pStr})${fareRatio != null ? ` — they are quoting at ${Math.round(fareRatio*100)}% of reference which is too far from our floor` : ''}. A revised offer at ${aed(s.best_fare)}/pax could significantly improve economics${s.displacement_cost > 0 ? ` while accounting for displacement cost of ${aed(s.displacement_cost)}` : ''}.${lfStr ? ` Flight is ${lfStr} full.` : ''}`
+      return `The agent's quoted fare produces suboptimal expected contribution. Countering at ${aed(s.best_fare)}/pax (P(convert) ${pStr}) maximises our return${lfStr ? ` on a ${lfStr} load-factor flight` : ''}${dow ? ` departing on a ${dow}` : ''}.${dispStr}${routeRate ? ` Route average conversion: ${routeRate}.` : ''}`
+    }
+    if (rec === 'Partial') {
+      return `Only ${s.best_seats} of ${pax} requested seats can be offered.${lfStr ? ` Flight is already ${lfStr} full —` : ''} blocking the full ${pax} seats would displace too much individual demand (displacement cost ${aed(s.displacement_cost)}).${s.best_fare ? ` A partial allocation at ${aed(s.best_fare)}/pax` : ''} still generates ${aed(s.expected_contribution)} in expected contribution.${agentRate ? ` Agent converts at ${agentRate} historically.` : ''}`
+    }
+    if (rec === 'Reject') {
+      if (s.expected_contribution <= 0) return `Expected contribution is negative (${aed(s.expected_contribution)}) — accepting this group would cost more than it earns after displacing individual bookings (displacement cost ${aed(s.displacement_cost)}).${lfStr ? ` The flight is ${lfStr} full, making individual demand especially valuable.` : ''} Rejecting preserves capacity for higher-value demand.`
+      return `Conversion probability (${pStr}) is below our minimum threshold${fareRatio != null ? ` and the fare at ${Math.round(fareRatio*100)}% of reference is insufficient` : ''}.${lfStr ? ` At ${lfStr} load factor,` : ''} the probability-weighted contribution does not justify blocking ${pax} seats${dow ? ` on a ${dow} departure` : ''}.${dispStr}`
+    }
+    return `P(convert) = ${pStr} · Expected contribution = ${aed(s.expected_contribution)} · Displacement = ${aed(s.displacement_cost)}.`
   }
 
   const isRequestContext = activePage === 'requests' && !!selectedId
@@ -618,6 +640,18 @@ Use professional airline tone. Subject line on first line as "Subject: ..."`
           {score && <>
           <div className={`recommendation-banner rec-${score.recommendation.toLowerCase()}`}><div className="recommend-icon"><Sparkles size={17}/></div><div><div className="recommend-label">RECOMMENDED ACTION</div><strong>{REC_LABELS[score.recommendation] ?? score.recommendation}</strong></div><span className="confidence">{pct(score.p_convert_base)} base P(convert)</span></div>
           <div className="offer-grid"><Offer label="Proposed fare" value={aed(fare)} suffix={`/ pax · ref ${aed(refFare)}`}/><Offer label="Seat allocation" value={`${seats} of ${pax} seats`} suffix={seats < pax ? 'partial allocation' : 'full request met'}/><Offer label="Agent must confirm within" value={`${deadline} days`} suffix="of receiving this offer"/><Offer label="Conversion probability" value={pct(probability)} suffix="model estimate" highlight/></div>
+          <div className="rec-why-box">
+            <div className="rec-why-header"><Sparkles size={12}/> Why this recommendation?</div>
+            <p className="rec-why-text">{getWhyExplanation(score, detail)}</p>
+            {drivers.length > 0 && <div className="rec-why-drivers">
+              <span className="rec-why-drivers-label">Key factors:</span>
+              {drivers.slice(0, 3).map((d) => (
+                <span key={d.feature} className={`rec-why-driver ${d.shap_value >= 0 ? 'pos' : 'neg'}`}>
+                  {d.shap_value >= 0 ? '↑' : '↓'} {featureLabel(d.feature)}
+                </span>
+              ))}
+            </div>}
+          </div>
           <div className="insight-breakdown">
             <div className="insight-row">
               <div className="insight-item"><span className="insight-label">Expected contribution</span><b className={`insight-value ${(contribution ?? 0) > 0 ? 'positive' : 'negative'}`}>{aed(contribution)}</b><small>if group converts</small></div>
@@ -626,22 +660,21 @@ Use professional airline tone. Subject line on first line as "Subject: ..."`
               <div className="insight-item"><span className="insight-label">Displacement cost</span><b className={`insight-value ${score.displacement_cost > 0 ? 'negative' : ''}`}>{aed(score.displacement_cost)}</b><small>{score.displacement_cost > 0 ? 'demand displaced' : 'no demand displaced'}</small></div>
             </div>
           </div>
-          {/* Why this recommendation — inline explanation from Claude */}
-          {(() => {
-            const whyMsg = chatHistory?.find((m) => m.role === 'assistant')
-            const whyText = whyMsg ? (typeof whyMsg.content === 'string' ? whyMsg.content : null) : null
-            return whyText ? (
-              <div className="rec-why-box">
-                <span className="rec-why-label"><Sparkles size={11}/> Why this recommendation</span>
-                <p>{whyText}</p>
-              </div>
-            ) : chatBusy ? (
-              <div className="rec-why-box rec-why-loading">
-                <span className="rec-why-label"><Sparkles size={11}/> Analysing…</span>
-              </div>
-            ) : null
-          })()}
-          <div className="button-row"><button disabled={busy} className={`action-btn approve-btn ${decision && decision !== 'reject' ? 'is-approved' : ''}`} onClick={() => decide('approve')}><Check size={14}/> {decision && decision !== 'reject' ? 'Recorded' : offerChanged ? 'Approve Edit' : 'Approve'}</button><button disabled={busy} className="action-btn reject-btn" onClick={() => decide('reject')}><X size={14}/> {decision === 'reject' ? 'Rejected' : 'Reject'}</button><button className="action-btn counter-btn" onClick={draftCounteroffer}><FileText size={14}/> Counteroffer</button></div>
+          {decision ? (
+            <div className={`decision-recorded-banner ${decision === 'reject' ? 'decision-rejected' : 'decision-approved'}`}>
+              {decision === 'reject' ? <X size={15}/> : <Check size={15}/>}
+              <span>
+                {decision === 'reject' ? 'Request rejected' : decision === 'edit' ? 'Approved with edited offer' : 'Recommendation approved'}
+                <small>Recorded in audit log · {selectedId}</small>
+              </span>
+            </div>
+          ) : (
+            <div className="button-row">
+              <button disabled={busy} className="action-btn approve-btn" onClick={() => decide('approve')}><Check size={14}/> {offerChanged ? 'Approve Edit' : 'Approve'}</button>
+              <button disabled={busy} className="action-btn reject-btn" onClick={() => decide('reject')}><X size={14}/> Reject</button>
+              <button className="action-btn counter-btn" onClick={draftCounteroffer}><FileText size={14}/> Counteroffer</button>
+            </div>
+          )}
           </>}
         </section>}
 

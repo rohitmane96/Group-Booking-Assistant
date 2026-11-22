@@ -159,7 +159,8 @@ docker compose up --build -d
 | POST   | `/requests/{id}/scenario`        | What-if scenario                 |
 | GET    | `/requests/{id}/drivers`         | SHAP drivers                     |
 | POST   | `/requests/{id}/counteroffer`    | Draft counteroffer email         |
-| POST   | `/requests/{id}/send-counteroffer` | Send counteroffer email        |
+| POST   | `/requests/{id}/rejection`       | Draft rejection email            |
+| POST   | `/requests/{id}/send-counteroffer` | Send counteroffer / rejection email |
 | POST   | `/requests/{id}/approve`         | Record human decision            |
 | GET    | `/audit`                         | Audit log                        |
 | POST   | `/chat`                          | Agentic chat (Claude)            |
@@ -217,9 +218,12 @@ Init container runs ETL + feature build + model training once on first start (sk
 - Revenue opportunities prioritisation engine
 - FastAPI backend (all endpoints including /summary/*)
 - Next.js 16 dashboard (Overview, Open Requests, All Requests, Audit Log)
-- Claude agent (tool_use loop) with auto-why explanation
-- Counteroffer email drafting
+- Claude agent (tool_use loop) with inline "why this recommendation" explanation
+- Counteroffer email drafting + rejection email drafting (templated, engine-driven)
+- Decision locking — once approved/rejected, action buttons replaced by status banner
+- Confirmation dialog before recording any human decision
 - Audit log
+- SMTP email sending (Gmail app password via env)
 - Docker Compose on Oracle Cloud VM with nginx
 
 ### ⚠️ Known Assumptions / Limitations

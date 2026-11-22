@@ -69,6 +69,32 @@ groupbookings@airarabia.com
 """
 
 
+REJECTION_TEMPLATE = """
+Dear Travel Partner,
+
+Thank you for your group booking inquiry with Air Arabia. We have carefully reviewed your request and regret to inform you that we are unable to accommodate it under the current terms.
+
+    Route:               {ond}
+    Flight:              {flight_number}
+    Travel Date:         {departure_date}
+    Requested Pax:       {seats} passengers
+    Quoted Fare:         AED {quoted_fare:,.0f} per passenger
+
+Reason for Rejection:
+{rejection_reason}
+
+Recommendation:
+{suggestion}
+
+We value your partnership and look forward to exploring future opportunities together. Please do not hesitate to reach out with revised requirements or for assistance with alternative travel dates.
+
+Warm regards,
+
+Air Arabia Group Desk
+groupbookings@airarabia.com
+"""
+
+
 def format_drivers(shap_values: list[dict], top_n: int = 5) -> str:
     """Format SHAP drivers as bullet points."""
     sorted_drivers = sorted(shap_values, key=lambda x: abs(x["shap_value"]), reverse=True)[:top_n]
